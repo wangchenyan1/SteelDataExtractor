@@ -281,6 +281,15 @@ def validate_properties(properties: list, field_config: dict) -> tuple[list, lis
                     "location": val.get("location", ""),
                     "detail": f"{cid}.{f}={val.get('value')} 来源不可靠({val.get('source')})，已剔除",
                 })
+                new_row[f] = {
+                    "value": val.get("value"),
+                    "unit": val.get("unit", ""),
+                    "source": val.get("source", ""),
+                    "excerpt": val.get("excerpt", ""),
+                    "location": val.get("location", ""),
+                    "status": "rejected_by_rule",
+                    "reject_reason": f"来源不可靠({val.get('source')})",
+                }
                 continue
             new_row[f] = {
                 "value": val.get("value"),
@@ -288,6 +297,7 @@ def validate_properties(properties: list, field_config: dict) -> tuple[list, lis
                 "source": val.get("source", ""),
                 "excerpt": val.get("excerpt", ""),
                 "location": val.get("location", ""),
+                "status": "accepted",
             }
         cleaned.append(new_row)
     return cleaned, warnings
