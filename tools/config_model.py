@@ -76,6 +76,9 @@ def identity_field_ids(template: dict) -> set[str]:
 
 
 def generate_steps(template: dict, fields: list[dict], overlay: dict) -> list[dict]:
+    if overlay.get("steps"):
+        return list(overlay["steps"])
+
     overrides = overlay.get("step_overrides")
     if overrides:
         steps = list(overrides)
@@ -91,6 +94,8 @@ def generate_steps(template: dict, fields: list[dict], overlay: dict) -> list[di
 
     group_fields: dict[str, list[str]] = {}
     for f in fields:
+        if f.get("category") != "property":
+            continue
         g = f.get("group")
         if g:
             group_fields.setdefault(g, []).append(f["id"])
@@ -111,13 +116,49 @@ def generate_steps(template: dict, fields: list[dict], overlay: dict) -> list[di
             }
         )
 
-    if any(f.get("category") == "figure" for f in fields):
-        steps.append({"id": "figures", "type": "figure", "name": "图片过滤"})
-
     return steps
 
 
+def validate_overlay_stages(overlay: dict, fields: list[dict]) -> None:
+    steps = overlay.get("steps") or []
+    if not steps:
+        return
+
+    if any(s.get("type") == "figure" for s in steps):
+        raise ValueError("阶段计划禁止包含 type=figure 的图片过滤步")
+
+    entity_idxs = [i for i, s in enumerate(steps) if s.get("type") == "entity"]
+    if len(entity_idxs) != 1 or entity_idxs[0] != 0:
+        raise ValueError("骨架步必须位于第一且唯一")
+
+    assigned: list[str] = []
+    for s in steps:
+        if s.get("type") != "property":
+            continue
+        fl = list(s.get("fields") or [])
+        if not fl:
+            raise ValueError("性能阶段 fields 不能为空")
+        assigned.extend(fl)
+
+    if len(assigned) != len(set(assigned)):
+        raise ValueError("性能字段不能重复挂阶段")
+
+    property_ids = {f["id"] for f in fields if f.get("category") == "property"}
+    assigned_set = set(assigned)
+    unassigned = sorted(property_ids - assigned_set)
+    if unassigned:
+        raise ValueError(f"未挂阶段: {', '.join(unassigned)}")
+    extra = sorted(assigned_set - property_ids)
+    if extra:
+        raise ValueError(f"阶段含未知或非性能字段: {', '.join(extra)}")
+
+
 def save_overlay(root: Path, project_id: str, overlay: dict) -> None:
+    if overlay.get("steps"):
+        template_id = overlay.get("template_id") or "blank"
+        library = load_field_library(root, template_id)
+        fields = effective_fields(library, overlay)
+        validate_overlay_stages(overlay, fields)
     path = root / "configs" / "projects" / f"{project_id}.json"
     _write_json(path, overlay)
 

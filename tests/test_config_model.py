@@ -21,7 +21,7 @@ def test_demo_effective_fields_and_steps():
     types = [s["type"] for s in steps]
     assert types[0] == "entity"
     assert "property" in types
-    assert types[-1] == "figure"
+    assert "figure" not in types
     groups = [s.get("group") for s in steps if s["type"] == "property"]
     assert "mechanical_properties" in groups
     assert "magnetic_properties" in groups
@@ -31,12 +31,15 @@ def test_unselected_group_omits_step():
     overlay = cm.load_overlay(ROOT, "demo_steel")
     overlay = dict(overlay)
     overlay["selected_field_ids"] = [i for i in overlay["selected_field_ids"] if i != "permeability"]
+    # 测自动生成：清除显式 steps，回退按 group 合成
+    overlay["steps"] = None
     lib = cm.load_field_library(ROOT, "steel")
     fields = cm.effective_fields(lib, overlay)
     steps = cm.generate_steps(cm.load_template(ROOT, "steel"), fields, overlay)
     groups = [s.get("group") for s in steps if s["type"] == "property"]
     assert "magnetic_properties" not in groups
     assert "mechanical_properties" in groups
+    assert "figure" not in [s["type"] for s in steps]
 
 
 def test_overlay_does_not_write_library(tmp_path: Path):

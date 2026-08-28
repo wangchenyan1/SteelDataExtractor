@@ -29,6 +29,23 @@
   "private_fields": [],
   "field_overrides": {},
   "step_overrides": null,
+  "steps": [
+    {"id": "entity", "type": "entity", "name": "骨架"},
+    {
+      "id": "mechanical",
+      "type": "property",
+      "name": "力学性能",
+      "group": "mechanical_properties",
+      "fields": ["yield_strength", "tensile_strength", "elongation"]
+    },
+    {
+      "id": "magnetic",
+      "type": "property",
+      "name": "磁性能",
+      "group": "magnetic_properties",
+      "fields": ["permeability"]
+    }
+  ],
   "property_source": {
     "allow": [
       "measured_table",
