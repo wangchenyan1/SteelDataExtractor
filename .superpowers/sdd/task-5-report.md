@@ -40,7 +40,7 @@ python3 -m pytest tests/test_paper_assets.py tests/test_export_results.py tests/
 
 **Finding:** `paper_id` 未限制在 `parsed_results/<paper_id>` 内，`..` / `../x` 可逃逸 `parsed_results`。
 
-**Fix:**
+**Fix commit:** `5ab15bb` — `fix: sandbox paper_id paths under parsed_results`
 - 新增 `_is_safe_paper_id`：拒绝空、`.`、`..` 及含路径分隔符的 `paper_id`（要求 `Path(paper_id).name == paper_id`）。
 - `resolve_paper_image_path` / `resolve_paper_pdf_path` / `paper_meta`：resolve 后校验 `paper_dir`/`images_dir` 位于 `parsed.resolve()` 下。
 - 负向测试：`paper_id=".."` / `"../x"` → image resolve 返回 None；meta/pdf HTTP 404。
