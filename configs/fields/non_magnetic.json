@@ -1,0 +1,452 @@
+{
+  "project_id": "non_magnetic",
+  "name": "无磁钢",
+  "description": "无磁钢 抽取配置（从历史脚本快照生成，按本项目性能维度拆成多步）。改 steps/fields/rules 即可调整。",
+  "composition_unit_default": "wt.%",
+  "fields": {
+    "metadata": [
+      "title",
+      "doi",
+      "material_system"
+    ],
+    "sample": [
+      "sample_name",
+      "product_form",
+      "alloy_family",
+      "composition",
+      "base_processing_description",
+      "sample_processing_overview",
+      "sample_microstructure_overview",
+      "sample_id",
+      "composition_unit"
+    ],
+    "condition": [
+      "condition_name",
+      "condition_type",
+      "condition_processing_description",
+      "microstructure",
+      "condition_id",
+      "sample_id",
+      "rolling_processing"
+    ],
+    "property": [
+      "yield_strength",
+      "tensile_strength",
+      "elongation",
+      "permeability",
+      "hardness",
+      "austenite_stability",
+      "impact_77K",
+      "martensite_transformation_temperature",
+      "saturation_magnetization",
+      "elastic_modulus",
+      "remanence",
+      "coercivity",
+      "curie_temperature",
+      "neel_temperature"
+    ],
+    "figure": [
+      "figure_id",
+      "placeholder_index",
+      "figure_type",
+      "is_microstructure_image",
+      "is_post_test_image",
+      "sample_id",
+      "condition_id",
+      "caption",
+      "scale_bar_info",
+      "image_purpose"
+    ]
+  },
+  "steps": [
+    {
+      "id": "entity",
+      "type": "entity",
+      "name": "Stage1 · 样品-状态骨架",
+      "desc": "只建立 sample/condition 索引，不抽性能"
+    },
+    {
+      "id": "mechanical",
+      "type": "property",
+      "name": "Stage2a · 力学性能",
+      "group": "mechanical_properties",
+      "fields": [
+        "yield_strength",
+        "tensile_strength",
+        "elongation",
+        "hardness",
+        "impact_77K",
+        "elastic_modulus"
+      ],
+      "desc": "单独一次调用，只补 mechanical_properties"
+    },
+    {
+      "id": "magnetic",
+      "type": "property",
+      "name": "Stage2b · 磁性能",
+      "group": "magnetic_properties",
+      "fields": [
+        "permeability",
+        "saturation_magnetization",
+        "remanence",
+        "coercivity",
+        "curie_temperature",
+        "neel_temperature"
+      ],
+      "desc": "单独一次调用，只补 magnetic_properties"
+    },
+    {
+      "id": "phase",
+      "type": "property",
+      "name": "Stage2c · 相稳定性",
+      "group": "phase_stability",
+      "fields": [
+        "austenite_stability",
+        "martensite_transformation_temperature"
+      ],
+      "desc": "单独一次调用，只补 phase_stability"
+    },
+    {
+      "id": "figures",
+      "type": "figure",
+      "name": "Stage3 · 图片分类过滤",
+      "desc": "组织图白名单过滤"
+    }
+  ],
+  "rules": {
+    "metadata.title": {
+      "rule": "字段定义：...",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。",
+      "source": "scripts/01_extract.py"
+    },
+    "metadata.material_system": {
+      "rule": "字段定义：钢种/合金体系简短描述（如 high-Mn non-magnetic steel, Cr-Mn-N austenitic steel）",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.sample_name": {
+      "rule": "字段定义：论文中样品的原始命名\n样品（sample）= 论文中**化学成分独特**或**初始工艺独特**的材料实体\n同一样品的不同热处理态/不同退火温度/不同冷却条件 → 属于 **conditions**，不是新样品",
+      "positive_examples": "例如：同一 18Mn 钢的 HR / ST1050 / ST1100 / ST1150 = **1 个样品 + 4 个 conditions**\n例如：Mn 含量不同的 13Mn / 18Mn / 23Mn = 3 个样品",
+      "negative_examples": "",
+      "note": "来自规则：样品识别（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.product_form": {
+      "rule": "字段定义：plate | sheet | bar | rod | rebar | wire | pipe | tube | angle_steel | pin | forging | casting | powder | bulk | target | other | not_specified\n推断优先级：论文明确声明 > 实验描述暗示 > 默认 other\n常见对应：plate(板材/薄板), bar(棒材/圆棒), rebar(钢筋), wire(线材), pipe(管材), angle_steel(角钢), pin(销轴), forging(锻件), casting(铸件), powder(粉末), bulk(块体), target(靶材)\n### 化学成分抽取（极其重要）",
+      "positive_examples": "",
+      "negative_examples": "必须从枚举值中选择，**禁止自创类别**\n无法确定 → other，不要瞎猜，不要把文中提到的参考文献的样品形态套到文献样品中\ncomposition 只填写论文成分表、正文或图表中**明确给出的元素和值**，不要为了凑字段补全元素\n严禁默认添加 `\"Fe\": \"bal.\"`；只有原文明确写出 `Fe balance`、`Fe bal.`、`balance Fe`、`Fe for balance`、`rest Fe`、`remainder Fe` 等含义时，才可以填写 Fe 为 `bal.`\n合金名或名义成分写成 `Fe-26Mn-11Al-1.15C`、`Fe-xMn-yAl-zC`、`Fe-34.5Ni-5Cr...`，**不等于**原文给出了 `Fe=bal.`；这种情况只抽取 Mn/Al/C/Ni/Cr 等明示数值，不要自动补 `Fe: bal.`",
+      "note": "来自规则：product_form 填写规则",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.alloy_family": {
+      "rule": "字段定义：Fe-Mn-Al-C | Mn-Cr-N | Mn-Cr-Mo-Ni 等（具体根据样品原始命名和元素组成而定）",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.base_processing_description": {
+      "rule": "字段定义：样品级公共工艺（冶炼、锻造等所有 condition 共享部分）",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.sample_processing_overview": {
+      "rule": "sample_processing_overview：以固定格式提取样品整体工艺关键参数，尽量减少冗余修饰词\n必须包含的要素（如论文中有）：钢号/材料名、钢种大类、热处理状态、关键温度与时间、加工状态、状态短语\nsample_microstructure_overview：以固定格式提取样品整体组织关键特征，尽量减少冗余修饰词\n必须包含的要素（如论文中有）：相组成、残余奥氏体分数、晶粒尺寸、析出相及尺寸、组织形貌\n两个字段控制在 ≤200 字符",
+      "positive_examples": "例如：\"18Mn non-magnetic steel, austenitic stainless steel, solution treated at 1100°C for 30 min, water quenched, hot rolled\"\n例如：\"fully austenitic, grain size ~25 μm, annealing twins, NbC precipitates ~10-20 nm, equiaxed morphology\"",
+      "negative_examples": "显微手段（OM/SEM/TEM/EBSD）仅作弱信息标注，不要过度拟合设备名称",
+      "note": "来自规则：sample_processing_overview 与 sample_microstructure_overview（样品级概述）",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.sample_microstructure_overview": {
+      "rule": "sample_processing_overview：以固定格式提取样品整体工艺关键参数，尽量减少冗余修饰词\n必须包含的要素（如论文中有）：钢号/材料名、钢种大类、热处理状态、关键温度与时间、加工状态、状态短语\nsample_microstructure_overview：以固定格式提取样品整体组织关键特征，尽量减少冗余修饰词\n必须包含的要素（如论文中有）：相组成、残余奥氏体分数、晶粒尺寸、析出相及尺寸、组织形貌\n两个字段控制在 ≤200 字符",
+      "positive_examples": "例如：\"18Mn non-magnetic steel, austenitic stainless steel, solution treated at 1100°C for 30 min, water quenched, hot rolled\"\n例如：\"fully austenitic, grain size ~25 μm, annealing twins, NbC precipitates ~10-20 nm, equiaxed morphology\"",
+      "negative_examples": "显微手段（OM/SEM/TEM/EBSD）仅作弱信息标注，不要过度拟合设备名称",
+      "note": "来自规则：sample_processing_overview 与 sample_microstructure_overview（样品级概述）",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.sample_id": {
+      "rule": "字段定义：S1\n样品（sample）= 论文中**化学成分独特**或**初始工艺独特**的材料实体\n同一样品的不同热处理态/不同退火温度/不同冷却条件 → 属于 **conditions**，不是新样品",
+      "positive_examples": "例如：同一 18Mn 钢的 HR / ST1050 / ST1100 / ST1150 = **1 个样品 + 4 个 conditions**\n例如：Mn 含量不同的 13Mn / 18Mn / 23Mn = 3 个样品",
+      "negative_examples": "",
+      "note": "来自规则：样品识别（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.composition_unit": {
+      "rule": "字段定义：wt.%",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.condition_name": {
+      "rule": "字段定义：条件名（极简代号，如 HR, ST1100, A900-15min, as-rolled）\n**必须用论文中给该条件起的简短代号**：HR、CR、ST1100、A900-15min 等",
+      "positive_examples": "",
+      "negative_examples": "**不要在 condition_name 中堆砌完整工艺描述**",
+      "note": "来自规则：condition_name（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.condition_type": {
+      "rule": "字段定义：processing_condition | microstructure_condition | mechanical_test_condition | post_test_condition\n`processing_condition`: 不同工艺态\n`microstructure_condition`: 仅描述组织态\n`mechanical_test_condition`: 性能测试条件\n`post_test_condition`: 断后样品（fractured, post-tensile）",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自规则：condition_type 严格区分",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.condition_processing_description": {
+      "rule": "字段定义：该条件独有的工艺细节（如 solution treated at 1100°C for 30 min, water quenched）。必须随 condition 不同而不同！\n每个 condition 必须有**自己独有的**工艺细节\n样品级公共工艺（冶炼成材）放到 sample.base_processing_description",
+      "positive_examples": "",
+      "negative_examples": "**绝对不要**让所有 condition 共享同一段笼统工艺",
+      "note": "来自规则：condition_processing_description（极其重要：必须随 condition 变化）",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.microstructure": {
+      "rule": "sample_processing_overview：以固定格式提取样品整体工艺关键参数，尽量减少冗余修饰词\n必须包含的要素（如论文中有）：钢号/材料名、钢种大类、热处理状态、关键温度与时间、加工状态、状态短语\nsample_microstructure_overview：以固定格式提取样品整体组织关键特征，尽量减少冗余修饰词\n必须包含的要素（如论文中有）：相组成、残余奥氏体分数、晶粒尺寸、析出相及尺寸、组织形貌\n两个字段控制在 ≤200 字符",
+      "positive_examples": "例如：\"18Mn non-magnetic steel, austenitic stainless steel, solution treated at 1100°C for 30 min, water quenched, hot rolled\"\n例如：\"fully austenitic, grain size ~25 μm, annealing twins, NbC precipitates ~10-20 nm, equiaxed morphology\"",
+      "negative_examples": "显微手段（OM/SEM/TEM/EBSD）仅作弱信息标注，不要过度拟合设备名称",
+      "note": "来自规则：sample_processing_overview 与 sample_microstructure_overview（样品级概述）",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.condition_id": {
+      "rule": "字段定义：C1\n**必须用论文中给该条件起的简短代号**：HR、CR、ST1100、A900-15min 等",
+      "positive_examples": "",
+      "negative_examples": "**不要在 condition_name 中堆砌完整工艺描述**",
+      "note": "来自规则：condition_name（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.sample_id": {
+      "rule": "字段定义：S1",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.rolling_processing": {
+      "rule": "5 项：\"heating_temperature\"（加热/再加热温度）、\"start_rolling_temperature\"（开轧温度）、\"finish_rolling_temperature\"（终轧/精轧温度）、\"reduction_ratio\"（总压下率/累计压下率，单位 % 或道次记 pass 时换算）、\"cooling_rate\"（轧后冷却速率 / 控冷速率）",
+      "positive_examples": "",
+      "negative_examples": "论文中没明确给出的字段：**留空对象 {} 或省略**，不要瞎编\n若某 condition 是 ST 固溶/退火态，没有轧制信息：rolling_processing 可整体省略",
+      "note": "来自规则：rolling_processing（轧制工艺）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "property.yield_strength": {
+      "rule": "\"yield_strength\"（屈服强度 σs / Rp0.2，MPa）\n\"tensile_strength\"（抗拉强度 σb / Rm，MPa）\n\"elongation\"（断后伸长率 δ / A，%）\n\"elastic_modulus\"（弹性模量 E，GPa）\n\"hardness\"（硬度 HV / HRC / HB，按论文标注单位）\n\"impact_77K\"（77K 液氮温度冲击功，J 或 J/cm²，按论文标注；如论文只给室温/0°C/-196°C 冲击值，注意 -196°C ≈ 77K，可填入该字段）",
+      "positive_examples": "",
+      "negative_examples": "都默认室温拉伸；如果论文给出多个温度，则只把室温值放在该字段。不能根据图表信息预估，只抽取正文中的性能数据。",
+      "note": "来自规则：mechanical_properties（力学性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "property.tensile_strength": {
+      "rule": "\"yield_strength\"（屈服强度 σs / Rp0.2，MPa）\n\"tensile_strength\"（抗拉强度 σb / Rm，MPa）\n\"elongation\"（断后伸长率 δ / A，%）\n\"elastic_modulus\"（弹性模量 E，GPa）\n\"hardness\"（硬度 HV / HRC / HB，按论文标注单位）\n\"impact_77K\"（77K 液氮温度冲击功，J 或 J/cm²，按论文标注；如论文只给室温/0°C/-196°C 冲击值，注意 -196°C ≈ 77K，可填入该字段）",
+      "positive_examples": "",
+      "negative_examples": "都默认室温拉伸；如果论文给出多个温度，则只把室温值放在该字段。不能根据图表信息预估，只抽取正文中的性能数据。",
+      "note": "来自规则：mechanical_properties（力学性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "property.elongation": {
+      "rule": "\"yield_strength\"（屈服强度 σs / Rp0.2，MPa）\n\"tensile_strength\"（抗拉强度 σb / Rm，MPa）\n\"elongation\"（断后伸长率 δ / A，%）\n\"elastic_modulus\"（弹性模量 E，GPa）\n\"hardness\"（硬度 HV / HRC / HB，按论文标注单位）\n\"impact_77K\"（77K 液氮温度冲击功，J 或 J/cm²，按论文标注；如论文只给室温/0°C/-196°C 冲击值，注意 -196°C ≈ 77K，可填入该字段）",
+      "positive_examples": "",
+      "negative_examples": "都默认室温拉伸；如果论文给出多个温度，则只把室温值放在该字段。不能根据图表信息预估，只抽取正文中的性能数据。",
+      "note": "来自规则：mechanical_properties（力学性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "property.permeability": {
+      "rule": "\"permeability\"（相对磁导率 μr，无量纲；少数论文给 μ 用 H/m）\n\"remanence\"（剩余磁化强度 / 剩磁 Br，常见单位 T、Gs、emu/g）\n\"coercivity\"（矫顽力 Hc，常见单位 Oe、A/m、kA/m）\n\"curie_temperature\"（居里温度 Tc，单位 °C 或 K，按原文，不换算）\n\"austenite_stability\"（奥氏体稳定性，固定格式字符串，≤150 字符，去除修饰词）：",
+      "positive_examples": "",
+      "negative_examples": "\"saturation_magnetization\"（饱和磁化强度 Ms / σs(磁)，常见单位 emu/g、A/m、T、kA/m；勿与屈服强度 σs 混淆）\n\"neel_temperature\"（奈尔温度 TN，单位 °C 或 K，按原文；勿与居里温度混淆）\n上述数值型字段：论文未给出对应数值时不要瞎编，可省略该字段；单位按原文填写",
+      "note": "来自规则：magnetic_properties（磁性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "property.hardness": {
+      "rule": "\"yield_strength\"（屈服强度 σs / Rp0.2，MPa）\n\"tensile_strength\"（抗拉强度 σb / Rm，MPa）\n\"elongation\"（断后伸长率 δ / A，%）\n\"elastic_modulus\"（弹性模量 E，GPa）\n\"hardness\"（硬度 HV / HRC / HB，按论文标注单位）\n\"impact_77K\"（77K 液氮温度冲击功，J 或 J/cm²，按论文标注；如论文只给室温/0°C/-196°C 冲击值，注意 -196°C ≈ 77K，可填入该字段）",
+      "positive_examples": "",
+      "negative_examples": "都默认室温拉伸；如果论文给出多个温度，则只把室温值放在该字段。不能根据图表信息预估，只抽取正文中的性能数据。",
+      "note": "来自规则：mechanical_properties（力学性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "property.austenite_stability": {
+      "rule": "字段定义：stable, no α'-martensite after 20% cold rolling, SFE=30 mJ/m²\n\"permeability\"（相对磁导率 μr，无量纲；少数论文给 μ 用 H/m）\n\"remanence\"（剩余磁化强度 / 剩磁 Br，常见单位 T、Gs、emu/g）\n\"coercivity\"（矫顽力 Hc，常见单位 Oe、A/m、kA/m）\n\"curie_temperature\"（居里温度 Tc，单位 °C 或 K，按原文，不换算）\n\"austenite_stability\"（奥氏体稳定性，固定格式字符串，≤150 字符，去除修饰词）：",
+      "positive_examples": "",
+      "negative_examples": "\"saturation_magnetization\"（饱和磁化强度 Ms / σs(磁)，常见单位 emu/g、A/m、T、kA/m；勿与屈服强度 σs 混淆）\n\"neel_temperature\"（奈尔温度 TN，单位 °C 或 K，按原文；勿与居里温度混淆）\n上述数值型字段：论文未给出对应数值时不要瞎编，可省略该字段；单位按原文填写",
+      "note": "来自规则：magnetic_properties（磁性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "property.impact_77K": {
+      "rule": "\"yield_strength\"（屈服强度 σs / Rp0.2，MPa）\n\"tensile_strength\"（抗拉强度 σb / Rm，MPa）\n\"elongation\"（断后伸长率 δ / A，%）\n\"elastic_modulus\"（弹性模量 E，GPa）\n\"hardness\"（硬度 HV / HRC / HB，按论文标注单位）\n\"impact_77K\"（77K 液氮温度冲击功，J 或 J/cm²，按论文标注；如论文只给室温/0°C/-196°C 冲击值，注意 -196°C ≈ 77K，可填入该字段）",
+      "positive_examples": "",
+      "negative_examples": "都默认室温拉伸；如果论文给出多个温度，则只把室温值放在该字段。不能根据图表信息预估，只抽取正文中的性能数据。",
+      "note": "来自规则：mechanical_properties（力学性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "property.martensite_transformation_temperature": {
+      "rule": "字段定义：Ms=-80°C, Md30=-40°C\n\"permeability\"（相对磁导率 μr，无量纲；少数论文给 μ 用 H/m）\n\"remanence\"（剩余磁化强度 / 剩磁 Br，常见单位 T、Gs、emu/g）\n\"coercivity\"（矫顽力 Hc，常见单位 Oe、A/m、kA/m）\n\"curie_temperature\"（居里温度 Tc，单位 °C 或 K，按原文，不换算）\n\"austenite_stability\"（奥氏体稳定性，固定格式字符串，≤150 字符，去除修饰词）：",
+      "positive_examples": "",
+      "negative_examples": "\"saturation_magnetization\"（饱和磁化强度 Ms / σs(磁)，常见单位 emu/g、A/m、T、kA/m；勿与屈服强度 σs 混淆）\n\"neel_temperature\"（奈尔温度 TN，单位 °C 或 K，按原文；勿与居里温度混淆）\n上述数值型字段：论文未给出对应数值时不要瞎编，可省略该字段；单位按原文填写",
+      "note": "来自规则：magnetic_properties（磁性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "property.saturation_magnetization": {
+      "rule": "\"permeability\"（相对磁导率 μr，无量纲；少数论文给 μ 用 H/m）\n\"remanence\"（剩余磁化强度 / 剩磁 Br，常见单位 T、Gs、emu/g）\n\"coercivity\"（矫顽力 Hc，常见单位 Oe、A/m、kA/m）\n\"curie_temperature\"（居里温度 Tc，单位 °C 或 K，按原文，不换算）\n\"austenite_stability\"（奥氏体稳定性，固定格式字符串，≤150 字符，去除修饰词）：",
+      "positive_examples": "",
+      "negative_examples": "\"saturation_magnetization\"（饱和磁化强度 Ms / σs(磁)，常见单位 emu/g、A/m、T、kA/m；勿与屈服强度 σs 混淆）\n\"neel_temperature\"（奈尔温度 TN，单位 °C 或 K，按原文；勿与居里温度混淆）\n上述数值型字段：论文未给出对应数值时不要瞎编，可省略该字段；单位按原文填写",
+      "note": "来自规则：magnetic_properties（磁性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "property.elastic_modulus": {
+      "rule": "\"yield_strength\"（屈服强度 σs / Rp0.2，MPa）\n\"tensile_strength\"（抗拉强度 σb / Rm，MPa）\n\"elongation\"（断后伸长率 δ / A，%）\n\"elastic_modulus\"（弹性模量 E，GPa）\n\"hardness\"（硬度 HV / HRC / HB，按论文标注单位）\n\"impact_77K\"（77K 液氮温度冲击功，J 或 J/cm²，按论文标注；如论文只给室温/0°C/-196°C 冲击值，注意 -196°C ≈ 77K，可填入该字段）",
+      "positive_examples": "",
+      "negative_examples": "都默认室温拉伸；如果论文给出多个温度，则只把室温值放在该字段。不能根据图表信息预估，只抽取正文中的性能数据。",
+      "note": "来自规则：mechanical_properties（力学性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "property.remanence": {
+      "rule": "\"permeability\"（相对磁导率 μr，无量纲；少数论文给 μ 用 H/m）\n\"remanence\"（剩余磁化强度 / 剩磁 Br，常见单位 T、Gs、emu/g）\n\"coercivity\"（矫顽力 Hc，常见单位 Oe、A/m、kA/m）\n\"curie_temperature\"（居里温度 Tc，单位 °C 或 K，按原文，不换算）\n\"austenite_stability\"（奥氏体稳定性，固定格式字符串，≤150 字符，去除修饰词）：",
+      "positive_examples": "",
+      "negative_examples": "\"saturation_magnetization\"（饱和磁化强度 Ms / σs(磁)，常见单位 emu/g、A/m、T、kA/m；勿与屈服强度 σs 混淆）\n\"neel_temperature\"（奈尔温度 TN，单位 °C 或 K，按原文；勿与居里温度混淆）\n上述数值型字段：论文未给出对应数值时不要瞎编，可省略该字段；单位按原文填写",
+      "note": "来自规则：magnetic_properties（磁性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "property.coercivity": {
+      "rule": "\"permeability\"（相对磁导率 μr，无量纲；少数论文给 μ 用 H/m）\n\"remanence\"（剩余磁化强度 / 剩磁 Br，常见单位 T、Gs、emu/g）\n\"coercivity\"（矫顽力 Hc，常见单位 Oe、A/m、kA/m）\n\"curie_temperature\"（居里温度 Tc，单位 °C 或 K，按原文，不换算）\n\"austenite_stability\"（奥氏体稳定性，固定格式字符串，≤150 字符，去除修饰词）：",
+      "positive_examples": "",
+      "negative_examples": "\"saturation_magnetization\"（饱和磁化强度 Ms / σs(磁)，常见单位 emu/g、A/m、T、kA/m；勿与屈服强度 σs 混淆）\n\"neel_temperature\"（奈尔温度 TN，单位 °C 或 K，按原文；勿与居里温度混淆）\n上述数值型字段：论文未给出对应数值时不要瞎编，可省略该字段；单位按原文填写",
+      "note": "来自规则：magnetic_properties（磁性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "property.curie_temperature": {
+      "rule": "\"permeability\"（相对磁导率 μr，无量纲；少数论文给 μ 用 H/m）\n\"remanence\"（剩余磁化强度 / 剩磁 Br，常见单位 T、Gs、emu/g）\n\"coercivity\"（矫顽力 Hc，常见单位 Oe、A/m、kA/m）\n\"curie_temperature\"（居里温度 Tc，单位 °C 或 K，按原文，不换算）\n\"austenite_stability\"（奥氏体稳定性，固定格式字符串，≤150 字符，去除修饰词）：",
+      "positive_examples": "",
+      "negative_examples": "\"saturation_magnetization\"（饱和磁化强度 Ms / σs(磁)，常见单位 emu/g、A/m、T、kA/m；勿与屈服强度 σs 混淆）\n\"neel_temperature\"（奈尔温度 TN，单位 °C 或 K，按原文；勿与居里温度混淆）\n上述数值型字段：论文未给出对应数值时不要瞎编，可省略该字段；单位按原文填写",
+      "note": "来自规则：magnetic_properties（磁性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "property.neel_temperature": {
+      "rule": "\"permeability\"（相对磁导率 μr，无量纲；少数论文给 μ 用 H/m）\n\"remanence\"（剩余磁化强度 / 剩磁 Br，常见单位 T、Gs、emu/g）\n\"coercivity\"（矫顽力 Hc，常见单位 Oe、A/m、kA/m）\n\"curie_temperature\"（居里温度 Tc，单位 °C 或 K，按原文，不换算）\n\"austenite_stability\"（奥氏体稳定性，固定格式字符串，≤150 字符，去除修饰词）：",
+      "positive_examples": "",
+      "negative_examples": "\"saturation_magnetization\"（饱和磁化强度 Ms / σs(磁)，常见单位 emu/g、A/m、T、kA/m；勿与屈服强度 σs 混淆）\n\"neel_temperature\"（奈尔温度 TN，单位 °C 或 K，按原文；勿与居里温度混淆）\n上述数值型字段：论文未给出对应数值时不要瞎编，可省略该字段；单位按原文填写",
+      "note": "来自规则：magnetic_properties（磁性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.figure_id": {
+      "rule": "字段定义：Figure 1a\nOM / SEM / TEM / EBSD / XRD 按图像内容判定\nhysteresis_loop = 磁滞回线，is_microstructure_image=false\n力学曲线、磁滞回线、XRD、示意图 → is_microstructure_image=false",
+      "positive_examples": "",
+      "negative_examples": "断后/拉断后/post-test 类图 → is_post_test_image=true → 不入数据库",
+      "note": "来自规则：Figure → Sample 映射 & 图片类型",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.placeholder_index": {
+      "rule": "必须与文本中的 [FIGURE_PLACEHOLDER_n] 编号一致",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自规则：placeholder_index",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.figure_type": {
+      "rule": "字段定义：OM | SEM | TEM | EBSD | XRD | stress_strain_curve | hysteresis_loop | schematic | other\nOM / SEM / TEM / EBSD / XRD 按图像内容判定\nhysteresis_loop = 磁滞回线，is_microstructure_image=false\n力学曲线、磁滞回线、XRD、示意图 → is_microstructure_image=false\n`is_microstructure_image=true` 且 `is_post_test_image=false`：组织观察图（before-test）\n`is_microstructure_image` 与 `is_post_test_image` 是两个独立维度，不是互斥字段\n`is_microstructure_image=false`: XRD 衍射图、电子衍射图（electron diffraction / diffraction pattern）、微衍射图（microdiffraction / micro diffraction）、SAED/selected-area diffraction、相图/示意图、磁滞回线、磁化曲线、应力-应变曲线、性能曲线\n`is_microstructure_image=true`: TEM/SEM/OM/EBSD 中的组织形貌、断口形貌、变形后形貌 →",
+      "positive_examples": "`is_post_test_image=true`：断后断口、断后 TEM/SEM/OM、拉伸后/变形后组织图、断口形貌图、力学曲线；caption 含 \"fractured\"、\"fracture surface\"、\"fractograph\"、\"post-test\"、\"after tensile\"、\"tensile-tested\"、\"interrupted tensile\"、\"deformed to fracture\"、\"rupture\" 等",
+      "negative_examples": "断后/拉断后/post-test 类图 → is_post_test_image=true → 不入数据库",
+      "note": "来自规则：Figure → Sample 映射 & 图片类型\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.is_microstructure_image": {
+      "rule": "OM / SEM / TEM / EBSD / XRD 按图像内容判定\nhysteresis_loop = 磁滞回线，is_microstructure_image=false\n力学曲线、磁滞回线、XRD、示意图 → is_microstructure_image=false\n`is_microstructure_image=true` 且 `is_post_test_image=false`：组织观察图（before-test）\n`is_microstructure_image` 与 `is_post_test_image` 是两个独立维度，不是互斥字段\n`is_microstructure_image=false`: XRD 衍射图、电子衍射图（electron diffraction / diffraction pattern）、微衍射图（microdiffraction / micro diffraction）、SAED/selected-area diffraction、相图/示意图、磁滞回线、磁化曲线、应力-应变曲线、性能曲线\n`is_microstructure_image=true`: TEM/SEM/OM/EBSD 中的组织形貌、断口形貌、变形后形貌 →",
+      "positive_examples": "`is_post_test_image=true`：断后断口、断后 TEM/SEM/OM、拉伸后/变形后组织图、断口形貌图、力学曲线；caption 含 \"fractured\"、\"fracture surface\"、\"fractograph\"、\"post-test\"、\"after tensile\"、\"tensile-tested\"、\"interrupted tensile\"、\"deformed to fracture\"、\"rupture\" 等",
+      "negative_examples": "断后/拉断后/post-test 类图 → is_post_test_image=true → 不入数据库",
+      "note": "来自规则：Figure → Sample 映射 & 图片类型\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.is_post_test_image": {
+      "rule": "OM / SEM / TEM / EBSD / XRD 按图像内容判定\nhysteresis_loop = 磁滞回线，is_microstructure_image=false\n力学曲线、磁滞回线、XRD、示意图 → is_microstructure_image=false\n`is_microstructure_image=true` 且 `is_post_test_image=false`：组织观察图（before-test）\n`is_microstructure_image` 与 `is_post_test_image` 是两个独立维度，不是互斥字段\n`is_microstructure_image=false`: XRD 衍射图、电子衍射图（electron diffraction / diffraction pattern）、微衍射图（microdiffraction / micro diffraction）、SAED/selected-area diffraction、相图/示意图、磁滞回线、磁化曲线、应力-应变曲线、性能曲线\n`is_microstructure_image=true`: TEM/SEM/OM/EBSD 中的组织形貌、断口形貌、变形后形貌 →",
+      "positive_examples": "`is_post_test_image=true`：断后断口、断后 TEM/SEM/OM、拉伸后/变形后组织图、断口形貌图、力学曲线；caption 含 \"fractured\"、\"fracture surface\"、\"fractograph\"、\"post-test\"、\"after tensile\"、\"tensile-tested\"、\"interrupted tensile\"、\"deformed to fracture\"、\"rupture\" 等",
+      "negative_examples": "断后/拉断后/post-test 类图 → is_post_test_image=true → 不入数据库",
+      "note": "来自规则：Figure → Sample 映射 & 图片类型\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.sample_id": {
+      "rule": "字段定义：S1\nOM / SEM / TEM / EBSD / XRD 按图像内容判定\nhysteresis_loop = 磁滞回线，is_microstructure_image=false\n力学曲线、磁滞回线、XRD、示意图 → is_microstructure_image=false",
+      "positive_examples": "",
+      "negative_examples": "断后/拉断后/post-test 类图 → is_post_test_image=true → 不入数据库",
+      "note": "来自规则：Figure → Sample 映射 & 图片类型",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.condition_id": {
+      "rule": "字段定义：C1\nOM / SEM / TEM / EBSD / XRD 按图像内容判定\nhysteresis_loop = 磁滞回线，is_microstructure_image=false\n力学曲线、磁滞回线、XRD、示意图 → is_microstructure_image=false",
+      "positive_examples": "",
+      "negative_examples": "断后/拉断后/post-test 类图 → is_post_test_image=true → 不入数据库",
+      "note": "来自规则：Figure → Sample 映射 & 图片类型",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.caption": {
+      "rule": "字段定义：图片标题（≤80 字符）\nOM / SEM / TEM / EBSD / XRD 按图像内容判定\nhysteresis_loop = 磁滞回线，is_microstructure_image=false\n力学曲线、磁滞回线、XRD、示意图 → is_microstructure_image=false\n`is_microstructure_image=true` 且 `is_post_test_image=false`：组织观察图（before-test）\n`is_microstructure_image` 与 `is_post_test_image` 是两个独立维度，不是互斥字段\n`is_microstructure_image=false`: XRD 衍射图、电子衍射图（electron diffraction / diffraction pattern）、微衍射图（microdiffraction / micro diffraction）、SAED/selected-area diffraction、相图/示意图、磁滞回线、磁化曲线、应力-应变曲线、性能曲线\n`is_microstructure_image=true`: TEM/SEM/OM/EBSD 中的组织形貌、断口形貌、变形后形貌 →",
+      "positive_examples": "`is_post_test_image=true`：断后断口、断后 TEM/SEM/OM、拉伸后/变形后组织图、断口形貌图、力学曲线；caption 含 \"fractured\"、\"fracture surface\"、\"fractograph\"、\"post-test\"、\"after tensile\"、\"tensile-tested\"、\"interrupted tensile\"、\"deformed to fracture\"、\"rupture\" 等",
+      "negative_examples": "断后/拉断后/post-test 类图 → is_post_test_image=true → 不入数据库",
+      "note": "来自规则：Figure → Sample 映射 & 图片类型\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.scale_bar_info": {
+      "rule": "对所有显微图片（组织图、断口形貌图等），必须尝试从图片上提取比例尺标注\n如图片上确实没有比例尺标注（如曲线图、示意图、磁滞回线），填 null\n注意区分比例尺（scale bar）和标尺文字，优先提取图片右下角/左下角的标注",
+      "positive_examples": "常见格式：50 μm、200 nm、1 mm、500 nm、10 μm 等",
+      "negative_examples": "",
+      "note": "来自规则：scale_bar_info（组织/形貌图比例尺提取）",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.image_purpose": {
+      "rule": "字段定义：before_test_microstructure | sample_level_microstructure | heat_treated_microstructure | post_test_fractography | fracture_surface | mechanical_curve | magnetic_curve | diffraction | schematic | other\nOM / SEM / TEM / EBSD / XRD 按图像内容判定\nhysteresis_loop = 磁滞回线，is_microstructure_image=false\n力学曲线、磁滞回线、XRD、示意图 → is_microstructure_image=false\n`is_microstructure_image=true` 且 `is_post_test_image=false`：组织观察图（before-test）\n`is_microstructure_image` 与 `is_post_test_image` 是两个独立维度，不是互斥字段\n`is_microstructure_image=false`: XRD 衍射图、电子衍射图（electron diffraction / diffraction pattern）、微衍射图（microdiffraction / micro diffraction）、SAED/selected-area diffraction、相图/示意图、磁滞回线、磁化曲线、应力-应变曲线、性能曲线\n`is_microstructure_image=true`: TEM/SEM/OM/EBSD 中的组织形貌、断口形貌、变形后形貌 →",
+      "positive_examples": "`is_post_test_image=true`：断后断口、断后 TEM/SEM/OM、拉伸后/变形后组织图、断口形貌图、力学曲线；caption 含 \"fractured\"、\"fracture surface\"、\"fractograph\"、\"post-test\"、\"after tensile\"、\"tensile-tested\"、\"interrupted tensile\"、\"deformed to fracture\"、\"rupture\" 等",
+      "negative_examples": "断后/拉断后/post-test 类图 → is_post_test_image=true → 不入数据库",
+      "note": "来自规则：Figure → Sample 映射 & 图片类型\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）",
+      "source": "scripts/01_extract.py"
+    }
+  },
+  "property_source": {
+    "allow": [
+      "measured_table",
+      "measured_text",
+      "example_table"
+    ],
+    "deny": [
+      "abstract_target",
+      "claim_range",
+      "generalized_threshold",
+      "figure_ocr",
+      "curve_estimate"
+    ],
+    "deny_phrase_patterns": [
+      "above",
+      "below",
+      "target",
+      "at least",
+      "no less than",
+      "以上",
+      "以下",
+      "不低于",
+      "目标",
+      "优选"
+    ]
+  },
+  "figure_filter": {
+    "keep_types": [
+      "OM",
+      "SEM",
+      "TEM",
+      "EBSD"
+    ],
+    "drop_types": [
+      "XRD",
+      "SAED",
+      "EDS",
+      "EDX",
+      "EPMA",
+      "stress_strain_curve",
+      "hysteresis_loop",
+      "schematic",
+      "other"
+    ],
+    "drop_if_post_test": true,
+    "require_microstructure": true
+  }
+}

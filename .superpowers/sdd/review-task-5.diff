@@ -1,0 +1,282 @@
+# Review Task 5
+===== tests/test_run_step.py =====
+from pathlib import Path
+from tools.pipeline import run_step
+
+ROOT = Path("/internfs/wangchenyan/shougang/steel_extract_tool_workspace")
+
+
+def test_property_before_entity_raises():
+    try:
+        run_step(ROOT, "demo_steel", "demo_steel_2024", "mechanical")
+        assert False, "should have raised"
+    except RuntimeError as e:
+        assert "骨架" in str(e)
+
+
+def test_staged_entity_then_mechanical():
+    out_e = run_step(ROOT, "demo_steel", "demo_steel_2024", "entity", partition="test")
+    assert out_e["result"]["samples"]
+    assert "mechanical_properties" not in out_e["result"]["conditions"][0]
+    out_m = run_step(ROOT, "demo_steel", "demo_steel_2024", "mechanical",
+                     run_id=out_e["run_id"], partition="test")
+    assert "mechanical_properties" in out_m["result"]["conditions"][0]
+    ys = out_m["result"]["conditions"][0]["mechanical_properties"]["yield_strength"]
+    assert ys.get("excerpt")
+    assert ys.get("location") == "Table 2"
+
+
+def test_rerun_entity_invalidates_and_reruns_downstream():
+    out_e = run_step(ROOT, "demo_steel", "demo_steel_2024", "entity", partition="test")
+    rid = out_e["run_id"]
+    run_step(ROOT, "demo_steel", "demo_steel_2024", "mechanical", run_id=rid, partition="test")
+    rerun = run_step(ROOT, "demo_steel", "demo_steel_2024", "entity", run_id=rid, partition="test")
+    assert "mechanical" in rerun["invalidated"]
+    assert "mechanical_properties" in rerun["result"]["conditions"][0]
+
+===== pipeline.py run_step and invalidate =====
+def _empty_entity() -> dict:
+    return {"paper_metadata": {}, "samples": [], "conditions": [], "figures": []}
+
+
+def _skeleton_done(state: dict) -> bool:
+    steps = get_steps(state["field_config"])
+    entity_ids = {s.get("id") for s in steps if s.get("type") == "entity"}
+    return bool(entity_ids & set(state.get("completed_steps") or []))
+
+
+def _find_step(field_config: dict, step_id: str) -> dict:
+    for step in get_steps(field_config):
+        if step.get("id") == step_id:
+            return step
+    raise ValueError(f"未知步骤: {step_id}")
+
+
+def _downstream_steps(field_config: dict) -> list:
+    return [s for s in get_steps(field_config) if s.get("type") in ("property", "figure")]
+
+
+def _clear_properties_dir(run_dir: Path) -> None:
+    prop_dir = run_dir / "properties"
+    if not prop_dir.exists():
+        return
+    for p in prop_dir.iterdir():
+def _write_run_outputs(state: dict) -> dict:
+    """合并结果并写 paper.json / RUN_INFO / summary，返回 result。"""
+    steps = get_steps(state["field_config"])
+    entity = state["entity"]
+    property_groups = state["property_groups"]
+    figures = state["figures"]
+    if not any(s.get("type") == "figure" for s in steps):
+        figures = entity.get("figures", [])
+        state["figures"] = figures
+
+    result = merge_result(entity, property_groups, figures)
+    result["_paper_id"] = state["paper_id"]
+    result["_pipeline"] = {
+        "mode": state["mode"],
+        "backend": state["backend"].name,
+        "input_trim": state["trim_stats"],
+        "condition_ids": state["condition_ids"],
+        "rules_applied": state["apply_rules"],
+        "steps": [{"id": s.get("id"), "type": s.get("type"),
+                   "name": s.get("name"), "group": s.get("group")} for s in steps],
+    }
+    warnings = state["warnings"]
+    if warnings:
+        result["_validation_warnings"] = warnings
+
+    run_dir = state["run_dir"]
+    (run_dir / "merged_outputs" / "paper.json").write_text(
+        json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    (run_dir / "review_notes" / "validation_warnings.json").write_text(
+        json.dumps(warnings, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    run_info = {
+        "run_id": state["run_id"],
+        "project_id": state["project_id"],
+        "paper_id": state["paper_id"],
+        "mode": state["mode"],
+        "partition": state["partition"],
+        "backend": state["backend"].name,
+        "created_at": state.get("created_at") or datetime.now().isoformat(timespec="seconds"),
+        "steps": len(steps),
+        "samples": len(result.get("samples", [])),
+        "conditions": len(result.get("conditions", [])),
+        "figures": len(result.get("figures", [])),
+        "warnings": len(warnings),
+        "template_id": state.get("template_id"),
+        "completed_steps": list(state.get("completed_steps") or []),
+        "invalidated_steps": list(state.get("invalidated_steps") or []),
+        "parse_skipped": bool(state.get("parse_skipped", True)),
+    }
+    if state.get("model_id"):
+        run_info["model_id"] = state["model_id"]
+    state["run_info"] = run_info
+    (run_dir / "RUN_INFO.json").write_text(
+        json.dumps(run_info, ensure_ascii=False, indent=2), encoding="utf-8")
+    (run_dir / "summary.md").write_text(
+        _build_summary_md(run_info, state["trim_stats"], warnings), encoding="utf-8")
+    return result
+
+
+def _prepare_run(root: Path, project_id: str, paper_id: str, *,
+                 mode: str = "two_stage", partition: str = "test",
+                 model_id: str | None = None, run_id: str | None = None) -> dict:
+    """建/接 run 目录、解析文本、trim；返回可执行步骤的 run_state。"""
+        })
+
+    else:
+        raise ValueError(f"不支持的步骤类型: {stype}")
+
+    completed = [x for x in state["completed_steps"] if x != sid]
+    completed.append(sid)
+    state["completed_steps"] = completed
+
+
+def _invalidate_downstream(state: dict) -> list:
+    """作废已完成的下游 property/figure 步骤，返回失效 step_id 列表。"""
+    down_ids = {s.get("id") for s in _downstream_steps(state["field_config"])}
+    invalidated = [sid for sid in state["completed_steps"] if sid in down_ids]
+    if not invalidated and not state["property_groups"] and not list(
+            (state["run_dir"] / "properties").glob("*")):
+        return []
+
+    # 即使 completed_steps 未记下游，只要磁盘有 properties 产物也视为失效
+    if not invalidated:
+        for step in _downstream_steps(state["field_config"]):
+            sid = step.get("id")
+            stype = step.get("type")
+            if stype == "property" and (state["run_dir"] / "properties" / f"{sid}_clean.json").exists():
+                invalidated.append(sid)
+            elif stype == "figure" and (state["run_dir"] / "properties" / f"{sid}_figures.json").exists():
+                invalidated.append(sid)
+
+    _clear_properties_dir(state["run_dir"])
+    state["property_groups"] = {}
+    state["figures"] = []
+    state["warnings"] = [
+        w for w in state["warnings"]
+        if w.get("type") not in ("property_source_rejected", "figure_dropped")
+    ]
+    state["completed_steps"] = [sid for sid in state["completed_steps"] if sid not in down_ids]
+    state["invalidated_steps"] = list(invalidated)
+    return invalidated
+
+
+def run_extraction(root: Path, project_id: str, paper_id: str,
+                   mode: str = "two_stage", partition: str = "test",
+                   model_id: str | None = None) -> dict:
+    state = _prepare_run(
+        root, project_id, paper_id, mode=mode, partition=partition, model_id=model_id)
+    steps = get_steps(state["field_config"])
+    for step in steps:
+        if mode == "entity_only" and step.get("type") != "entity":
+            continue
+        _execute_step(state, step)
+    result = _write_run_outputs(state)
+    return {
+        "run_id": state["run_id"],
+        "run_dir": str(state["run_dir"]),
+        "run_info": state["run_info"],
+        "result": result,
+        "entity": state["entity"],
+        "property_groups": state["property_groups"],
+        "figures": state["figures"],
+        "warnings": state["warnings"],
+        "trim_stats": state["trim_stats"],
+        "steps": state["step_reports"],
+        "prompts": state["prompts"],
+    }
+
+
+def run_step(root: Path, project_id: str, paper_id: str, step_id: str,
+             run_id: str | None = None, partition: str = "test",
+             model_id: str | None = None) -> dict:
+    """分阶段执行单个步骤；重跑骨架时作废并自动重跑全部下游。"""
+    state = _prepare_run(
+        root, project_id, paper_id,
+        mode="two_stage", partition=partition, model_id=model_id, run_id=run_id)
+    step = _find_step(state["field_config"], step_id)
+    stype = step.get("type")
+    invalidated: list = []
+
+    if stype in ("property", "figure") and not _skeleton_done(state):
+        raise RuntimeError("必须先完成骨架")
+
+    if stype == "entity":
+        # 重跑骨架：作废下游并自动重跑
+        had_downstream = bool(state.get("property_groups")) or any(
+            sid for sid in state.get("completed_steps") or []
+            if sid in {s.get("id") for s in _downstream_steps(state["field_config"])}
+        ) or any((state["run_dir"] / "properties").glob("*"))
+        if had_downstream:
+            invalidated = _invalidate_downstream(state)
+        _execute_step(state, step)
+        if had_downstream:
+            for down in _downstream_steps(state["field_config"]):
+                if state["mode"] == "entity_only" and down.get("type") != "entity":
+                    continue
+                _execute_step(state, down)
+    else:
+        state["invalidated_steps"] = []
+        _execute_step(state, step)
+
+    result = _write_run_outputs(state)
+    return {
+        "run_id": state["run_id"],
+        "run_dir": str(state["run_dir"]),
+        "run_info": state["run_info"],
+        "step": step_id,
+        "result": result,
+        "invalidated": invalidated,
+        "entity": state["entity"],
+        "property_groups": state["property_groups"],
+        "figures": state["figures"],
+        "warnings": state["warnings"],
+        "trim_stats": state["trim_stats"],
+        "steps": state["step_reports"],
+        "prompts": state["prompts"],
+    }
+
+===== mock yield_strength excerpt =====
+116:# 离线 mock 后端（非标识字段按规格 5.5 包成 {value, unit, excerpt, location}）
+118:def _fact(value, unit="", excerpt="", location=""):
+119:    return {"value": value, "unit": unit, "excerpt": excerpt, "location": location}
+127:                excerpt="Effect of Annealing Temperature on Microstructure and Mechanical Properties of a High-Nitrogen Austenitic Stainless Steel",
+128:                location="Title",
+132:                excerpt="High-nitrogen austenitic stainless steels are promising non-magnetic structural materials",
+133:                location="Abstract",
+139:                "sample_name": _fact("Steel A (Cr-Mn-N)", excerpt="Cr-Mn-N steel (Steel A)", location="Section 1. Introduction"),
+140:                "product_form": _fact("plate", excerpt="hot rolling into 12 mm plates", location="Section 2. Materials and Methods"),
+141:                "alloy_family": _fact("Cr-Mn-N", excerpt="Cr-Mn-N steel (Steel A)", location="Section 1. Introduction"),
+145:                    "excerpt": "Steel A (Cr-Mn-N) | 0.05 | 18.2",
+146:                    "location": "Table 1",
+150:                    excerpt="prepared by vacuum induction melting, hot forging and hot rolling into 12 mm plates",
+151:                    location="Section 2. Materials and Methods",
+156:                "sample_name": _fact("Steel B (Cr-Ni ref.)", excerpt="reference Cr-Ni steel (Steel B)", location="Section 1. Introduction"),
+157:                "product_form": _fact("plate", excerpt="hot rolling into 12 mm plates", location="Section 2. Materials and Methods"),
+158:                "alloy_family": _fact("Cr-Ni", excerpt="reference Cr-Ni steel (Steel B)", location="Section 1. Introduction"),
+162:                    "excerpt": "Steel B (Cr-Ni ref.) | 0.04 | 18.0",
+163:                    "location": "Table 1",
+167:                    excerpt="prepared by vacuum induction melting, hot forging and hot rolling into 12 mm plates",
+168:                    location="Section 2. Materials and Methods",
+174:             "condition_name": _fact("A-700", excerpt="A-700 | 700 | 685 | 1020 | 42", location="Table 2"),
+175:             "condition_type": _fact("processing_condition", excerpt="solution annealed at 700, 720 and 740 °C", location="Section 2. Materials and Methods"),
+178:                 excerpt="solution annealed at 700, 720 and 740 °C for 30 min followed by water quenching",
+179:                 location="Section 2. Materials and Methods"),
+180:             "test_temperature": _fact("RT", excerpt="Room-temperature tensile properties", location="Table 2"),
+183:                 excerpt="solution annealed at 700, 720 and 740 °C for 30 min",
+184:                 location="Section 2. Materials and Methods")},
+186:             "condition_name": _fact("A-720", excerpt="A-720 | 720 | 660 | 995 | 45", location="Table 2"),
+187:             "condition_type": _fact("processing_condition", excerpt="solution annealed at 700, 720 and 740 °C", location="Section 2. Materials and Methods"),
+190:                 excerpt="solution annealed at 700, 720 and 740 °C for 30 min followed by water quenching",
+191:                 location="Section 2. Materials and Methods"),
+192:             "test_temperature": _fact("RT", excerpt="Room-temperature tensile properties", location="Table 2"),
+195:                 excerpt="solution annealed at 700, 720 and 740 °C for 30 min",
+196:                 location="Section 2. Materials and Methods")},
+198:             "condition_name": _fact("A-740", excerpt="A-740 | 740 | 632 | 970 | 48", location="Table 2"),
+199:             "condition_type": _fact("processing_condition", excerpt="solution annealed at 700, 720 and 740 °C", location="Section 2. Materials and Methods"),
+202:                 excerpt="solution annealed at 700, 720 and 740 °C for 30 min followed by water quenching",
+203:                 location="Section 2. Materials and Methods"),
+204:             "test_temperature": _fact("RT", excerpt="Room-temperature tensile properties", location="Table 2"),

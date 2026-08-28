@@ -1,0 +1,187 @@
+# Review Task 8
+===== tests =====
+from tools.workbench_server import handle_get, handle_post
+
+
+def test_export_demo():
+    status, data = handle_get("/api/projects/demo_steel/export", {})
+    assert status == 200
+    assert data["template_id"] == "steel"
+    assert data["fields"]
+
+
+def test_field_library():
+    status, data = handle_get("/api/field_library", {"template": ["steel"]})
+    assert status == 200
+    assert data["fields"]
+===== handle_* =====
+def handle_get(route: str, qs: dict) -> tuple[int, dict]:
+    """Route GET API; returns (status, json_body)."""
+    parts = route.strip("/").split("/")
+
+    if route == "/api/health":
+        return 200, {"status": "ok", "root": str(ROOT)}
+    if route == "/api/projects":
+        return 200, build_projects_payload()
+    if route == "/api/papers":
+        cfg = pipeline.load_workspace_config(ROOT)["projects"].get(_q(qs, "project"), {})
+        return 200, {"papers": pipeline.list_papers(ROOT, cfg)}
+    if route == "/api/paper_text":
+        cfg = pipeline.load_workspace_config(ROOT)["projects"].get(_q(qs, "project"), {})
+        text = pipeline.get_paper_text(ROOT, cfg, _q(qs, "paper_id", ""))
+        if text is None:
+            return 404, {"error": "paper.md 未找到（该项目可能是只读快照，本地无原文）"}
+        return 200, {"paper_id": _q(qs, "paper_id"), "text": text}
+    if route == "/api/runs":
+        cfg = pipeline.load_workspace_config(ROOT)["projects"].get(_q(qs, "project"), {})
+        return 200, {"runs": pipeline.list_runs(ROOT, cfg, _q(qs, "paper_id"))}
+    if route == "/api/result":
+        res = latest_result(_q(qs, "project", ""), _q(qs, "paper_id", ""), _q(qs, "run_id"))
+        if res is None:
+            return 404, {"error": "暂无运行结果，请先试跑"}
+        return 200, res
+    if route == "/api/field_library":
+        template = _q(qs, "template", "steel")
+        return 200, config_model.load_field_library(ROOT, template)
+    if route == "/api/project_config":
+        project_id = _q(qs, "project", "")
+        return 200, config_model.load_overlay(ROOT, project_id)
+
+    # /api/projects/<id>/config|export
+    if len(parts) == 4 and parts[0] == "api" and parts[1] == "projects":
+        project_id, action = parts[2], parts[3]
+        if action == "export":
+            return 200, config_model.export_project(ROOT, project_id)
+        if action == "config":
+            return 200, config_model.load_overlay(ROOT, project_id)
+
+    return 404, {"error": "not found", "route": route}
+
+
+def handle_post(route: str, body: dict, files: dict | None = None) -> tuple[int, dict]:
+    """Route POST API; returns (status, json_body).
+
+    files: optional multipart map, e.g. {"pdf": {"filename": "...", "content": b"..."}}
+    """
+    files = files or {}
+    parts = route.strip("/").split("/")
+
+    try:
+        if route == "/api/projects":
+            overlay = config_model.create_project(
+                ROOT,
+                body.get("id", ""),
+                body.get("name", ""),
+                body.get("template_id", "steel"),
+                body.get("selected_field_ids") or [],
+            )
+            return 200, {"ok": True, "overlay": overlay, "id": body.get("id")}
+
+        if route == "/api/parse":
+            pdf_info = files.get("pdf")
+            result = _ensure_source_and_parse(
+                body.get("project", ""),
+                pdf_path=body.get("pdf_path"),
+                paper_id=body.get("paper_id"),
+                overwrite=bool(body.get("overwrite", False)),
+                pdf_bytes=pdf_info.get("content") if pdf_info else None,
+                pdf_filename=pdf_info.get("filename") if pdf_info else None,
+            )
+            return 200, result
+
+        if route == "/api/run":
+            parse_info = _maybe_parse_before_run(body)
+            out = pipeline.run_extraction(
+                ROOT,
+                body.get("project", ""),
+                body.get("paper_id", ""),
+                mode=body.get("mode", "two_stage"),
+                partition=body.get("partition", "test"),
+                model_id=body.get("model_id"),
+            )
+            payload = _run_payload(out)
+            if parse_info is not None:
+                payload["parse"] = parse_info
+            return 200, payload
+
+        if route == "/api/run_step":
+            out = pipeline.run_step(
+                ROOT,
+                body.get("project", ""),
+                body.get("paper_id", ""),
+                body.get("step_id", ""),
+                run_id=body.get("run_id"),
+                partition=body.get("partition", "test"),
+                model_id=body.get("model_id"),
+            )
+            payload = _run_payload(out)
+            payload["step"] = out.get("step")
+            payload["invalidated"] = out.get("invalidated", [])
+            return 200, payload
+
+        if route == "/api/reextract":
+            out = pipeline.reextract_field(
+                ROOT,
+                body.get("project", ""),
+                body.get("field_id", ""),
+                paper_id=body.get("paper_id"),
+                scope=body.get("scope"),
+                partition=body.get("partition", "test"),
+                model_id=body.get("model_id"),
+            )
+            return 200, out
+
+        if route == "/api/field_library/writeback":
+            config_model.writeback_library_field(
+                ROOT, body.get("template_id", ""), body.get("field") or {}
+            )
+            return 200, {"ok": True}
+
+        if route == "/api/field_library/promote":
+            overlay = config_model.promote_private_field(
+                ROOT, body.get("project", ""), body.get("field_id", "")
+            )
+            return 200, {"ok": True, "overlay": overlay}
+
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "projects" and parts[3] == "export":
+            return 200, config_model.export_project(ROOT, parts[2])
+
+    except Exception as exc:  # noqa: BLE001
+        return 500, {"error": str(exc)}
+
+    return 404, {"error": "not found", "route": route}
+
+
+def handle_put(route: str, body: dict, qs: dict | None = None) -> tuple[int, dict]:
+    """Route PUT API (project config overlay)."""
+    qs = qs or {}
+    parts = route.strip("/").split("/")
+    try:
+        if route == "/api/project_config":
+            project_id = _q(qs, "project", "") or body.get("project", "")
+            config_model.save_overlay(ROOT, project_id, body)
+            return 200, {"ok": True}
+
+        if len(parts) == 4 and parts[0] == "api" and parts[1] == "projects" and parts[3] == "config":
+            config_model.save_overlay(ROOT, parts[2], body)
+            return 200, {"ok": True}
+    except Exception as exc:  # noqa: BLE001
+        return 500, {"error": str(exc)}
+
+    return 404, {"error": "not found", "route": route}
+===== argparse extras =====
+502:        print("--parse-only 需要 --pdf PATH", file=sys.stderr)
+546:    parser.add_argument("--host", default="127.0.0.1")
+547:    parser.add_argument("--port", type=int, default=8787)
+548:    parser.add_argument("--run-once", action="store_true", help="命令行试跑一篇，不启动服务")
+549:    parser.add_argument("--project", default="demo_steel")
+550:    parser.add_argument("--paper-id", default="demo_steel_2024")
+551:    parser.add_argument("--mode", default="two_stage",
+553:    parser.add_argument("--partition", default="test", choices=["test", "data"])
+554:    parser.add_argument("--parse-only", action="store_true")
+555:    parser.add_argument("--pdf", default=None)
+556:    parser.add_argument("--step", default=None)
+557:    parser.add_argument("--reextract-field", default=None)
+558:    parser.add_argument("--export-fields-schema", action="store_true")
+559:    parser.add_argument("--overwrite-parse", action="store_true")
+562:    # 互斥优先级：export > parse-only > reextract-field > step > run-once

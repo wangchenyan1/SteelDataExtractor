@@ -1,0 +1,418 @@
+{
+  "project_id": "nuclear_fusion",
+  "name": "核聚变低磁奥氏体钢",
+  "description": "核聚变低磁奥氏体钢 抽取配置（从历史脚本快照生成，按本项目性能维度拆成多步）。改 steps/fields/rules 即可调整。",
+  "composition_unit_default": "wt.%",
+  "fields": {
+    "metadata": [
+      "title",
+      "doi",
+      "material_system"
+    ],
+    "sample": [
+      "sample_name",
+      "product_form",
+      "alloy_family",
+      "composition",
+      "base_processing_description",
+      "sample_processing_overview",
+      "sample_microstructure_overview",
+      "sample_id",
+      "composition_unit"
+    ],
+    "condition": [
+      "condition_name",
+      "condition_type",
+      "component_type",
+      "joint_or_material_type",
+      "welding_process",
+      "filler_material",
+      "heat_treatment_condition",
+      "test_temperature",
+      "condition_processing_description",
+      "microstructure",
+      "condition_id",
+      "sample_id"
+    ],
+    "property": [
+      "yield_strength",
+      "tensile_strength",
+      "elongation",
+      "fracture_toughness",
+      "permeability",
+      "hardness"
+    ],
+    "figure": [
+      "figure_id",
+      "placeholder_index",
+      "figure_type",
+      "is_microstructure_image",
+      "is_post_test_image",
+      "sample_id",
+      "condition_id",
+      "caption",
+      "scale_bar_info",
+      "image_purpose"
+    ]
+  },
+  "steps": [
+    {
+      "id": "entity",
+      "type": "entity",
+      "name": "Stage1 · 样品-状态骨架",
+      "desc": "只建立 sample/condition 索引，不抽性能"
+    },
+    {
+      "id": "mechanical",
+      "type": "property",
+      "name": "Stage2a · 力学性能",
+      "group": "mechanical_properties",
+      "fields": [
+        "yield_strength",
+        "tensile_strength",
+        "elongation",
+        "fracture_toughness",
+        "hardness"
+      ],
+      "desc": "单独一次调用，只补 mechanical_properties"
+    },
+    {
+      "id": "magnetic",
+      "type": "property",
+      "name": "Stage2b · 磁性能",
+      "group": "magnetic_properties",
+      "fields": [
+        "permeability"
+      ],
+      "desc": "单独一次调用，只补 magnetic_properties"
+    },
+    {
+      "id": "figures",
+      "type": "figure",
+      "name": "Stage3 · 图片分类过滤",
+      "desc": "组织图白名单过滤"
+    }
+  ],
+  "rules": {
+    "metadata.title": {
+      "rule": "字段定义：...",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。",
+      "source": "scripts/01_extract.py"
+    },
+    "metadata.material_system": {
+      "rule": "字段定义：钢种/合金体系简短描述（如 high-Mn non-magnetic steel, Cr-Mn-N austenitic steel）",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.sample_name": {
+      "rule": "字段定义：论文中样品的原始命名\n样品（sample）= 论文中**化学成分独特**或**初始工艺独特**的材料实体\n同一样品的不同热处理态/不同退火温度/不同冷却条件 → 属于 **conditions**，不是新样品",
+      "positive_examples": "例如：同一 18Mn 钢的 HR / ST1050 / ST1100 / ST1150 = **1 个样品 + 4 个 conditions**\n例如：Mn 含量不同的 13Mn / 18Mn / 23Mn = 3 个样品",
+      "negative_examples": "",
+      "note": "来自规则：样品识别（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.product_form": {
+      "rule": "字段定义：plate | sheet | bar | rod | wire | pipe | tube | conduit | jacket | coil_case | weldment | weld_metal | filler_wire | forging | casting | bulk | other | not_specified\n推断优先级：论文明确声明 > 实验描述暗示 > 默认 other\n常见对应：plate(板材), sheet(薄板), bar/rod(棒材), wire/filler wire(焊丝), pipe/tube/conduit/jacket(管/导管/套管), coil_case(线圈盒), weldment/weld_metal(焊接件/焊缝金属), forging(锻件), casting(铸件), bulk(块体)",
+      "positive_examples": "",
+      "negative_examples": "必须从枚举值中选择，**禁止自创类别**\n无法确定 → other，不要瞎猜，不要把参考文献的样品形态套到本文样品中",
+      "note": "来自规则：product_form 填写规则",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.alloy_family": {
+      "rule": "字段定义：Cu-Mn-Nb-V-N | Cr-Mn-N | other",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.composition": {
+      "rule": "composition 只填写论文成分表、正文或图表中**明确给出的元素和值**，不要为了凑字段补全元素",
+      "positive_examples": "",
+      "negative_examples": "严禁默认添加 `\"Fe\": \"bal.\"`；只有原文明确写出 `Fe balance`、`Fe bal.`、`balance Fe`、`Fe for balance`、`rest Fe`、`remainder Fe` 等含义时，才可以填写 Fe 为 `bal.`\n合金名或名义成分写成 `Fe-26Mn-11Al-1.15C`、`Fe-xMn-yAl-zC`、`Fe-34.5Ni-5Cr...`，**不等于**原文给出了 `Fe=bal.`；这种情况只抽取 Mn/Al/C/Ni/Cr 等明示数值，不要自动补 `Fe: bal.`\n如果表格/正文给出 Fe 的明确数值（如 at.% 表中 Fe=50.0，或 wt.% 表中 Fe=66.00），则按原数值填写 Fe；不要把明确数值改成 `bal.`\n原文只说 steel / non-magnetic steel / iron-rich / Fe-X binary alloy components / iron content 等材料背景，不等于给出了成分表中的 Fe；这种情况不要输出 Fe\n某元素未在原文成分中明确出现时，直接省略该元素，不要填 `0`、`unknown`、`not reported` 或示例值",
+      "note": "来自规则：化学成分抽取（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.base_processing_description": {
+      "rule": "字段定义：样品级公共工艺（冶炼、锻造等所有 condition 共享部分）",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.sample_processing_overview": {
+      "rule": "字段定义：样品整体工艺关键参数（固定格式提取，去除修饰词）：钢号/材料名（如 316LN, JJ1, JK2LB）、钢种大类（低磁/高氮/氮强化奥氏体不锈钢）、热处理状态（solution treated/aged/Nb3Sn reacted/as-welded）、关键温度与时间、加工状态（forged/rolled/welded/as-received）\nsample_processing_overview：以固定格式提取样品整体工艺关键参数，尽量减少冗余修饰词\n必须包含的要素（如论文中有）：钢号/材料名、钢种大类、热处理状态、关键温度与时间、加工状态、状态短语\nsample_microstructure_overview：以固定格式提取样品整体组织关键特征，尽量减少冗余修饰词\n必须包含的要素（如论文中有）：相组成、残余奥氏体分数、晶粒尺寸、析出相及尺寸、组织形貌\n两个字段控制在 ≤200 字符",
+      "positive_examples": "例如：\"18Mn non-magnetic steel, austenitic stainless steel, solution treated at 1100°C for 30 min, water quenched, hot rolled\"\n例如：\"fully austenitic, grain size ~25 μm, annealing twins, NbC precipitates ~10-20 nm, equiaxed morphology\"",
+      "negative_examples": "显微手段（OM/SEM/TEM/EBSD）仅作弱信息标注，不要过度拟合设备名称",
+      "note": "来自规则：sample_processing_overview 与 sample_microstructure_overview（样品级概述）",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.sample_microstructure_overview": {
+      "rule": "字段定义：样品整体组织关键特征（固定格式提取，去除修饰词）：austenite/ferrite/delta-ferrite/martensite、晶粒尺寸、析出相、焊缝/HAZ组织、断裂相关组织。显微手段（OM/SEM/TEM/EBSD）仅作弱信息标注\nsample_processing_overview：以固定格式提取样品整体工艺关键参数，尽量减少冗余修饰词\n必须包含的要素（如论文中有）：钢号/材料名、钢种大类、热处理状态、关键温度与时间、加工状态、状态短语\nsample_microstructure_overview：以固定格式提取样品整体组织关键特征，尽量减少冗余修饰词\n必须包含的要素（如论文中有）：相组成、残余奥氏体分数、晶粒尺寸、析出相及尺寸、组织形貌\n两个字段控制在 ≤200 字符",
+      "positive_examples": "例如：\"18Mn non-magnetic steel, austenitic stainless steel, solution treated at 1100°C for 30 min, water quenched, hot rolled\"\n例如：\"fully austenitic, grain size ~25 μm, annealing twins, NbC precipitates ~10-20 nm, equiaxed morphology\"",
+      "negative_examples": "显微手段（OM/SEM/TEM/EBSD）仅作弱信息标注，不要过度拟合设备名称",
+      "note": "来自规则：sample_processing_overview 与 sample_microstructure_overview（样品级概述）",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.sample_id": {
+      "rule": "字段定义：S1\n样品（sample）= 论文中**化学成分独特**或**初始工艺独特**的材料实体\n同一样品的不同热处理态/不同退火温度/不同冷却条件 → 属于 **conditions**，不是新样品",
+      "positive_examples": "例如：同一 18Mn 钢的 HR / ST1050 / ST1100 / ST1150 = **1 个样品 + 4 个 conditions**\n例如：Mn 含量不同的 13Mn / 18Mn / 23Mn = 3 个样品",
+      "negative_examples": "",
+      "note": "来自规则：样品识别（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.composition_unit": {
+      "rule": "字段定义：wt.%",
+      "positive_examples": "",
+      "negative_examples": "composition 只填写论文成分表、正文或图表中**明确给出的元素和值**，不要为了凑字段补全元素\n严禁默认添加 `\"Fe\": \"bal.\"`；只有原文明确写出 `Fe balance`、`Fe bal.`、`balance Fe`、`Fe for balance`、`rest Fe`、`remainder Fe` 等含义时，才可以填写 Fe 为 `bal.`\n合金名或名义成分写成 `Fe-26Mn-11Al-1.15C`、`Fe-xMn-yAl-zC`、`Fe-34.5Ni-5Cr...`，**不等于**原文给出了 `Fe=bal.`；这种情况只抽取 Mn/Al/C/Ni/Cr 等明示数值，不要自动补 `Fe: bal.`\n如果表格/正文给出 Fe 的明确数值（如 at.% 表中 Fe=50.0，或 wt.% 表中 Fe=66.00），则按原数值填写 Fe；不要把明确数值改成 `bal.`\n原文只说 steel / non-magnetic steel / iron-rich / Fe-X binary alloy components / iron content 等材料背景，不等于给出了成分表中的 Fe；这种情况不要输出 Fe\n某元素未在原文成分中明确出现时，直接省略该元素，不要填 `0`、`unknown`、`not reported` 或示例值",
+      "note": "来自规则：化学成分抽取（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.condition_name": {
+      "rule": "字段定义：条件名（极简代号，如 as-welded, 4.2K, Nb3Sn-reacted, aged, HAZ, WM）\n**必须用论文中给该条件起的简短代号**：HR、CR、ST1100、A900-15min 等",
+      "positive_examples": "",
+      "negative_examples": "**不要在 condition_name 中堆砌完整工艺描述**",
+      "note": "来自规则：condition_name（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.condition_type": {
+      "rule": "字段定义：processing_condition | microstructure_condition | mechanical_test_condition | post_test_condition\n`processing_condition`: 不同工艺态\n`microstructure_condition`: 仅描述组织态\n`mechanical_test_condition`: 性能测试条件\n`post_test_condition`: 断后样品（fractured, post-tensile）",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自规则：condition_type 严格区分",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.component_type": {
+      "rule": "字段定义：armor | coil_case | conduit_jacket | magnet_structure | other | unclear\ncomponent_type 表示这组 condition/性能数据对应的核聚变工程对象，必须从枚举中选择：\narmor：原文明示 armor / jacket armor / 结构铠甲相关焊接接头。\ncoil_case：原文明示 coil case / TF coil case / CS coil case / PF coil case / correction coil case / coil case structure。\nconduit_jacket：原文明示 conduit / CICC jacket / cable-in-conduit conductor jacket / CS conduit。\nother：核聚变相关但不是上述对象。\njoint_or_material_type 表示性能数据测量对象，必须从枚举中选择：base_metal | weld_metal | welded_joint | HAZ | deposited_metal | unclear。",
+      "positive_examples": "",
+      "negative_examples": "magnet_structure：只说明 fusion magnet / superconducting magnet structure，但不能明确归入 coil_case 或 conduit_jacket。\nunclear：无法从论文判断。",
+      "note": "来自规则：component_type 与 joint_or_material_type 规则",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.joint_or_material_type": {
+      "rule": "字段定义：base_metal | weld_metal | welded_joint | HAZ | deposited_metal | unclear\ncomponent_type 表示这组 condition/性能数据对应的核聚变工程对象，必须从枚举中选择：\narmor：原文明示 armor / jacket armor / 结构铠甲相关焊接接头。\ncoil_case：原文明示 coil case / TF coil case / CS coil case / PF coil case / correction coil case / coil case structure。\nconduit_jacket：原文明示 conduit / CICC jacket / cable-in-conduit conductor jacket / CS conduit。\nother：核聚变相关但不是上述对象。\njoint_or_material_type 表示性能数据测量对象，必须从枚举中选择：base_metal | weld_metal | welded_joint | HAZ | deposited_metal | unclear。",
+      "positive_examples": "",
+      "negative_examples": "magnet_structure：只说明 fusion magnet / superconducting magnet structure，但不能明确归入 coil_case 或 conduit_jacket。\nunclear：无法从论文判断。",
+      "note": "来自规则：component_type 与 joint_or_material_type 规则",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.welding_process": {
+      "rule": "字段定义：TIG | GTAW | laser_welding | electron_beam_welding | NG-MAG | SAW | hybrid_welding | other | not_specified\nwelding_process 表示焊接方法，必须从枚举中选择：TIG | GTAW | laser_welding | electron_beam_welding | NG-MAG | SAW | hybrid_welding | other | not_specified。\nfiller_material 填写焊材、焊丝或填充金属的原文名称；无填充金属可写 none，未说明写 not_specified。\nheat_treatment_condition 填写该 condition 对应的热处理/服役前热循环，如 as-welded、Nb3Sn reacted、aged、solution treated、PWHT；如果原文给出温度和时间，应保留在同一字符串中。",
+      "positive_examples": "",
+      "negative_examples": "test_temperature 只填写这组性能数据对应的测试温度，如 4.2 K、4 K、77 K、RT；不要把热处理温度误填为测试温度。RT 必须写成 {\"value\":\"RT\",\"unit\":\"\"}。\n板厚、坡口、焊接电流/电压、热输入、保护气、试样位置、取向等低频工艺细节统一写入 condition_processing_description，不作为独立字段。",
+      "note": "来自规则：焊接/热处理/测试温度字段规则",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.filler_material": {
+      "rule": "字段定义：焊材/焊丝/填充金属原文名称，如 ER316LMn, FMYJJ1, 316L filler, none, not_specified\nwelding_process 表示焊接方法，必须从枚举中选择：TIG | GTAW | laser_welding | electron_beam_welding | NG-MAG | SAW | hybrid_welding | other | not_specified。\nfiller_material 填写焊材、焊丝或填充金属的原文名称；无填充金属可写 none，未说明写 not_specified。\nheat_treatment_condition 填写该 condition 对应的热处理/服役前热循环，如 as-welded、Nb3Sn reacted、aged、solution treated、PWHT；如果原文给出温度和时间，应保留在同一字符串中。",
+      "positive_examples": "",
+      "negative_examples": "test_temperature 只填写这组性能数据对应的测试温度，如 4.2 K、4 K、77 K、RT；不要把热处理温度误填为测试温度。RT 必须写成 {\"value\":\"RT\",\"unit\":\"\"}。\n板厚、坡口、焊接电流/电压、热输入、保护气、试样位置、取向等低频工艺细节统一写入 condition_processing_description，不作为独立字段。",
+      "note": "来自规则：焊接/热处理/测试温度字段规则",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.heat_treatment_condition": {
+      "rule": "字段定义：as-welded | Nb3Sn reacted | aged | solution treated | PWHT | other | not_specified；可保留原文温度时间\nwelding_process 表示焊接方法，必须从枚举中选择：TIG | GTAW | laser_welding | electron_beam_welding | NG-MAG | SAW | hybrid_welding | other | not_specified。\nfiller_material 填写焊材、焊丝或填充金属的原文名称；无填充金属可写 none，未说明写 not_specified。\nheat_treatment_condition 填写该 condition 对应的热处理/服役前热循环，如 as-welded、Nb3Sn reacted、aged、solution treated、PWHT；如果原文给出温度和时间，应保留在同一字符串中。",
+      "positive_examples": "",
+      "negative_examples": "test_temperature 只填写这组性能数据对应的测试温度，如 4.2 K、4 K、77 K、RT；不要把热处理温度误填为测试温度。RT 必须写成 {\"value\":\"RT\",\"unit\":\"\"}。\n板厚、坡口、焊接电流/电压、热输入、保护气、试样位置、取向等低频工艺细节统一写入 condition_processing_description，不作为独立字段。",
+      "note": "来自规则：焊接/热处理/测试温度字段规则",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.test_temperature": {
+      "rule": "welding_process 表示焊接方法，必须从枚举中选择：TIG | GTAW | laser_welding | electron_beam_welding | NG-MAG | SAW | hybrid_welding | other | not_specified。\nfiller_material 填写焊材、焊丝或填充金属的原文名称；无填充金属可写 none，未说明写 not_specified。\nheat_treatment_condition 填写该 condition 对应的热处理/服役前热循环，如 as-welded、Nb3Sn reacted、aged、solution treated、PWHT；如果原文给出温度和时间，应保留在同一字符串中。",
+      "positive_examples": "",
+      "negative_examples": "test_temperature 只填写这组性能数据对应的测试温度，如 4.2 K、4 K、77 K、RT；不要把热处理温度误填为测试温度。RT 必须写成 {\"value\":\"RT\",\"unit\":\"\"}。\n板厚、坡口、焊接电流/电压、热输入、保护气、试样位置、取向等低频工艺细节统一写入 condition_processing_description，不作为独立字段。",
+      "note": "来自规则：焊接/热处理/测试温度字段规则",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.condition_processing_description": {
+      "rule": "字段定义：该条件独有的补充工艺/测试细节：板厚、坡口、试样位置、取向、热输入等低频信息合并写在这里。必须随 condition 不同而不同！\n每个 condition 必须有**自己独有的**工艺细节\n样品级公共工艺（冶炼成材）放到 sample.base_processing_description",
+      "positive_examples": "",
+      "negative_examples": "**绝对不要**让所有 condition 共享同一段笼统工艺",
+      "note": "来自规则：condition_processing_description（极其重要：必须随 condition 变化）",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.microstructure": {
+      "rule": "sample_processing_overview：以固定格式提取样品整体工艺关键参数，尽量减少冗余修饰词\n必须包含的要素（如论文中有）：钢号/材料名、钢种大类、热处理状态、关键温度与时间、加工状态、状态短语\nsample_microstructure_overview：以固定格式提取样品整体组织关键特征，尽量减少冗余修饰词\n必须包含的要素（如论文中有）：相组成、残余奥氏体分数、晶粒尺寸、析出相及尺寸、组织形貌\n两个字段控制在 ≤200 字符",
+      "positive_examples": "例如：\"18Mn non-magnetic steel, austenitic stainless steel, solution treated at 1100°C for 30 min, water quenched, hot rolled\"\n例如：\"fully austenitic, grain size ~25 μm, annealing twins, NbC precipitates ~10-20 nm, equiaxed morphology\"",
+      "negative_examples": "显微手段（OM/SEM/TEM/EBSD）仅作弱信息标注，不要过度拟合设备名称",
+      "note": "来自规则：sample_processing_overview 与 sample_microstructure_overview（样品级概述）",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.condition_id": {
+      "rule": "字段定义：C1\n**必须用论文中给该条件起的简短代号**：HR、CR、ST1100、A900-15min 等",
+      "positive_examples": "",
+      "negative_examples": "**不要在 condition_name 中堆砌完整工艺描述**",
+      "note": "来自规则：condition_name（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.sample_id": {
+      "rule": "字段定义：S1",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。",
+      "source": "scripts/01_extract.py"
+    },
+    "property.yield_strength": {
+      "rule": "优先抽取与核聚变装置 4.2K 焊接接头相关的实测性能；如果论文给出多个温度，分别建立 condition 或在 condition_processing_description 中明确温度。\n\"yield_strength\"（屈服强度 / 0.2% proof stress / Rp0.2 / YS，MPa）\n\"tensile_strength\"（抗拉强度 / UTS / Rm，MPa）\n\"elongation\"（断后伸长率 / total elongation / uniform elongation，%，如原文给出）",
+      "positive_examples": "",
+      "negative_examples": "\"fracture_toughness\"（断裂韧性 KIC/KJIC/KIC(J)/JIC/JQ/J-R），单位 MPa·m^1/2；如果原文只给 JIC，按原文单位填写，不要强行换算）\n只抽取上述列出的力学性能字段；其他低频力学信息不作为独立字段。\n以下内容禁止填入 mechanical_properties：\nYoung's modulus / elastic modulus / shear modulus / bulk modulus / Poisson ratio",
+      "note": "来自规则：mechanical_properties（力学性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "property.tensile_strength": {
+      "rule": "优先抽取与核聚变装置 4.2K 焊接接头相关的实测性能；如果论文给出多个温度，分别建立 condition 或在 condition_processing_description 中明确温度。\n\"yield_strength\"（屈服强度 / 0.2% proof stress / Rp0.2 / YS，MPa）\n\"tensile_strength\"（抗拉强度 / UTS / Rm，MPa）\n\"elongation\"（断后伸长率 / total elongation / uniform elongation，%，如原文给出）",
+      "positive_examples": "",
+      "negative_examples": "\"fracture_toughness\"（断裂韧性 KIC/KJIC/KIC(J)/JIC/JQ/J-R），单位 MPa·m^1/2；如果原文只给 JIC，按原文单位填写，不要强行换算）\n只抽取上述列出的力学性能字段；其他低频力学信息不作为独立字段。\n以下内容禁止填入 mechanical_properties：\nYoung's modulus / elastic modulus / shear modulus / bulk modulus / Poisson ratio",
+      "note": "来自规则：mechanical_properties（力学性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "property.elongation": {
+      "rule": "优先抽取与核聚变装置 4.2K 焊接接头相关的实测性能；如果论文给出多个温度，分别建立 condition 或在 condition_processing_description 中明确温度。\n\"yield_strength\"（屈服强度 / 0.2% proof stress / Rp0.2 / YS，MPa）\n\"tensile_strength\"（抗拉强度 / UTS / Rm，MPa）\n\"elongation\"（断后伸长率 / total elongation / uniform elongation，%，如原文给出）",
+      "positive_examples": "",
+      "negative_examples": "\"fracture_toughness\"（断裂韧性 KIC/KJIC/KIC(J)/JIC/JQ/J-R），单位 MPa·m^1/2；如果原文只给 JIC，按原文单位填写，不要强行换算）\n只抽取上述列出的力学性能字段；其他低频力学信息不作为独立字段。\n以下内容禁止填入 mechanical_properties：\nYoung's modulus / elastic modulus / shear modulus / bulk modulus / Poisson ratio",
+      "note": "来自规则：mechanical_properties（力学性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "property.fracture_toughness": {
+      "rule": "优先抽取与核聚变装置 4.2K 焊接接头相关的实测性能；如果论文给出多个温度，分别建立 condition 或在 condition_processing_description 中明确温度。\n\"yield_strength\"（屈服强度 / 0.2% proof stress / Rp0.2 / YS，MPa）\n\"tensile_strength\"（抗拉强度 / UTS / Rm，MPa）\n\"elongation\"（断后伸长率 / total elongation / uniform elongation，%，如原文给出）",
+      "positive_examples": "",
+      "negative_examples": "\"fracture_toughness\"（断裂韧性 KIC/KJIC/KIC(J)/JIC/JQ/J-R），单位 MPa·m^1/2；如果原文只给 JIC，按原文单位填写，不要强行换算）\n只抽取上述列出的力学性能字段；其他低频力学信息不作为独立字段。\n以下内容禁止填入 mechanical_properties：\nYoung's modulus / elastic modulus / shear modulus / bulk modulus / Poisson ratio",
+      "note": "来自规则：mechanical_properties（力学性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "property.permeability": {
+      "rule": "只抽取 permeability（相对磁导率 μr 或 magnetic permeability）。\n单位按原文填写；相对磁导率可写 unit=\"(relative)\"。",
+      "positive_examples": "",
+      "negative_examples": "论文未给出 permeability 数值时省略 magnetic_properties 或留空对象；除 permeability 外，其他磁性能不作为独立字段抽取。",
+      "note": "来自规则：magnetic_properties（磁性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "property.hardness": {
+      "rule": "优先抽取与核聚变装置 4.2K 焊接接头相关的实测性能；如果论文给出多个温度，分别建立 condition 或在 condition_processing_description 中明确温度。\n\"yield_strength\"（屈服强度 / 0.2% proof stress / Rp0.2 / YS，MPa）\n\"tensile_strength\"（抗拉强度 / UTS / Rm，MPa）\n\"elongation\"（断后伸长率 / total elongation / uniform elongation，%，如原文给出）",
+      "positive_examples": "",
+      "negative_examples": "\"fracture_toughness\"（断裂韧性 KIC/KJIC/KIC(J)/JIC/JQ/J-R），单位 MPa·m^1/2；如果原文只给 JIC，按原文单位填写，不要强行换算）\n只抽取上述列出的力学性能字段；其他低频力学信息不作为独立字段。\n以下内容禁止填入 mechanical_properties：\nYoung's modulus / elastic modulus / shear modulus / bulk modulus / Poisson ratio",
+      "note": "来自规则：mechanical_properties（力学性能）规则",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.figure_id": {
+      "rule": "字段定义：Figure 1a\nOM / SEM / TEM / EBSD / XRD 按图像内容判定",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自规则：Figure → Sample 映射 & 图片类型",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.placeholder_index": {
+      "rule": "必须与文本中的 [FIGURE_PLACEHOLDER_n] 编号一致",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自规则：placeholder_index",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.figure_type": {
+      "rule": "字段定义：OM | SEM | TEM | EBSD | XRD | stress_strain_curve | hysteresis_loop | schematic | other\nOM / SEM / TEM / EBSD / XRD 按图像内容判定\n`is_microstructure_image=true` 且 `is_post_test_image=false`：组织观察图（before-test）\n`is_microstructure_image` 与 `is_post_test_image` 是两个独立维度，不是互斥字段\n`is_microstructure_image=false`: 器件图、XRD 衍射图、电子衍射图、微衍射图、SAED/selected-area diffraction、相图/示意图、磁滞回线、磁化曲线、应力-应变曲线、性能曲线\n`is_microstructure_image=true`: TEM/SEM/OM/EBSD 中的组织形貌、断口形貌、变形后形貌\nJ-R curve、S-N curve、FCGR curve、crack extension curve、stress-strain curve、XRD、SAED、EDS spectrum、schematic/specimen dimension/sample location 一律不是 post-test image，除非图像本身是断口/断后形貌照片。",
+      "positive_examples": "`is_post_test_image=true`：断后断口、断后 TEM/SEM/OM、拉伸后/变形后组织图、断口形貌图；caption 含 \"fractured\"、\"fracture surface\"、\"fractograph\"、\"post-test\"、\"after tensile\"、\"tensile-tested\"、\"interrupted tensile\"、\"deformed to fracture\"、\"rupture\" 等",
+      "negative_examples": "",
+      "note": "来自规则：Figure → Sample 映射 & 图片类型\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.is_microstructure_image": {
+      "rule": "OM / SEM / TEM / EBSD / XRD 按图像内容判定\n`is_microstructure_image=true` 且 `is_post_test_image=false`：组织观察图（before-test）\n`is_microstructure_image` 与 `is_post_test_image` 是两个独立维度，不是互斥字段\n`is_microstructure_image=false`: 器件图、XRD 衍射图、电子衍射图、微衍射图、SAED/selected-area diffraction、相图/示意图、磁滞回线、磁化曲线、应力-应变曲线、性能曲线\n`is_microstructure_image=true`: TEM/SEM/OM/EBSD 中的组织形貌、断口形貌、变形后形貌\nJ-R curve、S-N curve、FCGR curve、crack extension curve、stress-strain curve、XRD、SAED、EDS spectrum、schematic/specimen dimension/sample location 一律不是 post-test image，除非图像本身是断口/断后形貌照片。",
+      "positive_examples": "`is_post_test_image=true`：断后断口、断后 TEM/SEM/OM、拉伸后/变形后组织图、断口形貌图；caption 含 \"fractured\"、\"fracture surface\"、\"fractograph\"、\"post-test\"、\"after tensile\"、\"tensile-tested\"、\"interrupted tensile\"、\"deformed to fracture\"、\"rupture\" 等",
+      "negative_examples": "",
+      "note": "来自规则：Figure → Sample 映射 & 图片类型\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.is_post_test_image": {
+      "rule": "OM / SEM / TEM / EBSD / XRD 按图像内容判定\n`is_microstructure_image=true` 且 `is_post_test_image=false`：组织观察图（before-test）\n`is_microstructure_image` 与 `is_post_test_image` 是两个独立维度，不是互斥字段\n`is_microstructure_image=false`: 器件图、XRD 衍射图、电子衍射图、微衍射图、SAED/selected-area diffraction、相图/示意图、磁滞回线、磁化曲线、应力-应变曲线、性能曲线\n`is_microstructure_image=true`: TEM/SEM/OM/EBSD 中的组织形貌、断口形貌、变形后形貌\nJ-R curve、S-N curve、FCGR curve、crack extension curve、stress-strain curve、XRD、SAED、EDS spectrum、schematic/specimen dimension/sample location 一律不是 post-test image，除非图像本身是断口/断后形貌照片。",
+      "positive_examples": "`is_post_test_image=true`：断后断口、断后 TEM/SEM/OM、拉伸后/变形后组织图、断口形貌图；caption 含 \"fractured\"、\"fracture surface\"、\"fractograph\"、\"post-test\"、\"after tensile\"、\"tensile-tested\"、\"interrupted tensile\"、\"deformed to fracture\"、\"rupture\" 等",
+      "negative_examples": "",
+      "note": "来自规则：Figure → Sample 映射 & 图片类型\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.sample_id": {
+      "rule": "字段定义：S1\nOM / SEM / TEM / EBSD / XRD 按图像内容判定",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自规则：Figure → Sample 映射 & 图片类型",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.condition_id": {
+      "rule": "字段定义：C1\nOM / SEM / TEM / EBSD / XRD 按图像内容判定",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自规则：Figure → Sample 映射 & 图片类型",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.caption": {
+      "rule": "字段定义：图片标题（≤80 字符）\nOM / SEM / TEM / EBSD / XRD 按图像内容判定\n`is_microstructure_image=true` 且 `is_post_test_image=false`：组织观察图（before-test）\n`is_microstructure_image` 与 `is_post_test_image` 是两个独立维度，不是互斥字段\n`is_microstructure_image=false`: 器件图、XRD 衍射图、电子衍射图、微衍射图、SAED/selected-area diffraction、相图/示意图、磁滞回线、磁化曲线、应力-应变曲线、性能曲线\n`is_microstructure_image=true`: TEM/SEM/OM/EBSD 中的组织形貌、断口形貌、变形后形貌\nJ-R curve、S-N curve、FCGR curve、crack extension curve、stress-strain curve、XRD、SAED、EDS spectrum、schematic/specimen dimension/sample location 一律不是 post-test image，除非图像本身是断口/断后形貌照片。",
+      "positive_examples": "`is_post_test_image=true`：断后断口、断后 TEM/SEM/OM、拉伸后/变形后组织图、断口形貌图；caption 含 \"fractured\"、\"fracture surface\"、\"fractograph\"、\"post-test\"、\"after tensile\"、\"tensile-tested\"、\"interrupted tensile\"、\"deformed to fracture\"、\"rupture\" 等",
+      "negative_examples": "",
+      "note": "来自规则：Figure → Sample 映射 & 图片类型\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.scale_bar_info": {
+      "rule": "对所有显微图片（组织图、断口形貌图等），必须尝试从图片上提取比例尺标注\n如图片上确实没有比例尺标注（如曲线图、示意图、磁滞回线），填 null\n注意区分比例尺（scale bar）和标尺文字，优先提取图片右下角/左下角的标注",
+      "positive_examples": "常见格式：50 μm、200 nm、1 mm、500 nm、10 μm 等",
+      "negative_examples": "",
+      "note": "来自规则：scale_bar_info（组织/形貌图比例尺提取）",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.image_purpose": {
+      "rule": "字段定义：before_test_microstructure | sample_level_microstructure | heat_treated_microstructure | post_test_fractography | fracture_surface | mechanical_curve | magnetic_curve | diffraction | schematic | other\nOM / SEM / TEM / EBSD / XRD 按图像内容判定\n`is_microstructure_image=true` 且 `is_post_test_image=false`：组织观察图（before-test）\n`is_microstructure_image` 与 `is_post_test_image` 是两个独立维度，不是互斥字段\n`is_microstructure_image=false`: 器件图、XRD 衍射图、电子衍射图、微衍射图、SAED/selected-area diffraction、相图/示意图、磁滞回线、磁化曲线、应力-应变曲线、性能曲线\n`is_microstructure_image=true`: TEM/SEM/OM/EBSD 中的组织形貌、断口形貌、变形后形貌\nJ-R curve、S-N curve、FCGR curve、crack extension curve、stress-strain curve、XRD、SAED、EDS spectrum、schematic/specimen dimension/sample location 一律不是 post-test image，除非图像本身是断口/断后形貌照片。",
+      "positive_examples": "`is_post_test_image=true`：断后断口、断后 TEM/SEM/OM、拉伸后/变形后组织图、断口形貌图；caption 含 \"fractured\"、\"fracture surface\"、\"fractograph\"、\"post-test\"、\"after tensile\"、\"tensile-tested\"、\"interrupted tensile\"、\"deformed to fracture\"、\"rupture\" 等",
+      "negative_examples": "",
+      "note": "来自规则：Figure → Sample 映射 & 图片类型\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）",
+      "source": "scripts/01_extract.py"
+    }
+  },
+  "property_source": {
+    "allow": [
+      "measured_table",
+      "measured_text",
+      "example_table"
+    ],
+    "deny": [
+      "abstract_target",
+      "claim_range",
+      "generalized_threshold",
+      "figure_ocr",
+      "curve_estimate"
+    ],
+    "deny_phrase_patterns": [
+      "above",
+      "below",
+      "target",
+      "at least",
+      "no less than",
+      "以上",
+      "以下",
+      "不低于",
+      "目标",
+      "优选"
+    ]
+  },
+  "figure_filter": {
+    "keep_types": [
+      "OM",
+      "SEM",
+      "TEM",
+      "EBSD"
+    ],
+    "drop_types": [
+      "XRD",
+      "SAED",
+      "EDS",
+      "EDX",
+      "EPMA",
+      "stress_strain_curve",
+      "hysteresis_loop",
+      "schematic",
+      "other"
+    ],
+    "drop_if_post_test": true,
+    "require_microstructure": true
+  }
+}

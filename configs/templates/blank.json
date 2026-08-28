@@ -1,0 +1,14 @@
+{
+  "id": "blank",
+  "name": "空模板",
+  "domain_hint": "",
+  "layers": [
+    {"id": "metadata", "name": "文章信息", "cardinality": "one", "json_key": "paper_metadata"},
+    {"id": "sample", "name": "样品信息", "cardinality": "many", "json_key": "samples", "id_field": "sample_id"},
+    {"id": "condition", "name": "状态信息", "cardinality": "many", "json_key": "conditions", "id_field": "condition_id", "parent_layer": "sample", "parent_id_field": "sample_id"},
+    {"id": "property", "name": "性能", "attach_to": "condition"},
+    {"id": "figure", "name": "图片信息", "cardinality": "many", "json_key": "figures", "ref_fields": ["sample_id", "condition_id"]}
+  ],
+  "property_groups": [],
+  "identity_fields": ["sample_id", "condition_id"]
+}

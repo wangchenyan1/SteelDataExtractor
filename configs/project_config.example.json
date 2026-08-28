@@ -1,0 +1,34 @@
+{
+  "workspace_mode": "sandbox",
+  "remote_source_root": "/internfs/wangchenyan/shougang/Extract_data",
+  "write_policy": {
+    "remote_extract_data": "read_only",
+    "test_outputs": "steel_extract_tool_workspace/test_runs/<project_id>/<run_id>"
+  },
+  "projects": {
+    "non_magnetic": {
+      "name": "无磁钢",
+      "script_snapshot": "script_snapshots/non_magnetic/scripts",
+      "test_runs": "test_runs/non_magnetic",
+      "stages": ["metadata_entity_figure_extraction", "property_extraction", "manual_review", "merge_export"]
+    },
+    "nuclear_fusion": {
+      "name": "核聚变低磁奥氏体钢",
+      "script_snapshot": "script_snapshots/nuclear_fusion/scripts",
+      "test_runs": "test_runs/nuclear_fusion",
+      "stages": ["metadata_entity_figure_extraction", "property_extraction", "manual_review", "merge_export"]
+    },
+    "cor_res": {
+      "name": "耐蚀钢",
+      "script_snapshot": "script_snapshots/cor_res/scripts",
+      "test_runs": "test_runs/cor_res",
+      "stages": ["metadata_entity_figure_extraction", "property_extraction", "manual_review", "merge_export"]
+    },
+    "cuti": {
+      "name": "钛铜",
+      "script_snapshot": "script_snapshots/cuti/scripts",
+      "test_runs": "test_runs/cuti",
+      "stages": ["metadata_entity_figure_extraction", "property_extraction", "manual_review", "merge_export"]
+    }
+  }
+}

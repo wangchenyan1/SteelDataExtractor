@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>材料文献抽取工作台 Demo</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <div class="crumb">数据抽取 / 分阶段抽取工作台 / Demo</div>
+        <h1>SteelDataExtractor</h1>
+      </div>
+        <div class="safe-badge" id="modeBadge">远端测试工作区 · 结果写入 test_runs · 不写入 Extract_data</div>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar">
+        <section>
+          <div class="panel-title">
+            <h2>项目</h2>
+            <button class="ghost tiny" id="btnNewProject">新建</button>
+          </div>
+          <div class="project-list" id="projectList"></div>
+        </section>
+        <section>
+          <h2>抽取步骤</h2>
+          <ol class="steps" id="stepList"></ol>
+        </section>
+      </aside>
+
+      <section class="content">
+        <section class="intro">
+          <div>
+            <h2 id="projectTitle">核聚变低磁奥氏体钢</h2>
+            <p id="projectDesc"></p>
+          </div>
+          <div class="run-actions" id="runActions">
+            <button class="primary" id="btnRunAll">整篇一次跑完</button>
+            <button class="primary" id="btnRunStep">跑当前步骤</button>
+            <button class="ghost" id="btnParseOnly">只解析</button>
+            <div class="reextract-row">
+              <select id="reextractField" title="重抽字段"></select>
+              <select id="reextractScope" title="重抽范围">
+                <option value="current">当前文献</option>
+                <option value="project_extracted">本项目已抽文献</option>
+              </select>
+              <button class="ghost" id="btnReextract">只重抽</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <h3>模型接口配置</h3>
+            <span class="mode-hint">试跑配置 · API key 由远端 .env 提供</span>
+          </div>
+          <div class="model-config">
+            <label>
+              抽取模型
+              <select id="modelSelect"></select>
+            </label>
+            <label>
+              Base URL
+              <input id="modelBaseUrl" readonly />
+            </label>
+            <label>
+              模型名
+              <input id="modelName" readonly />
+            </label>
+          </div>
+          <div id="modelInfo" class="model-info"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <h3>文献输入</h3>
+            <span class="mode-hint">使用已有 parsed_results/paper.md，或提供 PDF 路径解析</span>
+          </div>
+          <div class="paper-config">
+            <label>
+              已有 paper_id
+              <select id="paperSelect"></select>
+            </label>
+            <label>
+              或手动输入 paper_id
+              <input id="paperIdInput" placeholder="例如 10.1016_j.fusengdes.2014.10.006" />
+            </label>
+            <label>
+              PDF 路径（只解析 / 无 md 时）
+              <input id="pdfPathInput" placeholder="可选：本地 PDF 绝对路径" />
+            </label>
+            <label>
+              抽取模式
+              <select id="extractMode">
+                <option value="two_stage">两阶段：框架 + 性质</option>
+                <option value="entity_only">只抽框架</option>
+                <option value="single_pass">单次抽取</option>
+              </select>
+            </label>
+            <label>
+              输出分区
+              <select id="outputPartition">
+                <option value="test">测试：test_runs/项目/test</option>
+                <option value="data">正式：test_runs/项目/data</option>
+              </select>
+            </label>
+            <button id="usePaperBtn" class="ghost">使用该文献</button>
+          </div>
+          <pre id="paperRunPreview" class="run-preview"></pre>
+        </section>
+
+        <section class="panel review-workbench">
+          <div class="panel-title">
+            <h3>运行与结果 Review</h3>
+            <span class="mode-hint" id="apiStatus">后端未检测</span>
+          </div>
+          <div class="run-toolbar">
+            <button id="loadReviewBtn" class="ghost">载入原文和最新结果</button>
+            <button id="refreshRunBtn" class="ghost">刷新运行状态</button>
+            <label>
+              结果来源
+              <select id="runSelect">
+                <option value="">自动选择最新结果</option>
+              </select>
+            </label>
+          </div>
+          <div id="runStatus" class="run-status">启动后端后，可以在这里运行抽取、查看日志，并把原文与 JSON 结果并排核对。</div>
+
+          <div class="review-split">
+            <article class="source-pane">
+              <div class="pane-title">
+                <h4>原文 / PDF</h4>
+                <span id="sourceMeta">尚未载入</span>
+              </div>
+              <iframe id="pdfViewer" title="原文 PDF" hidden></iframe>
+              <pre id="paperTextViewer" class="paper-viewer">选择文献后点击“载入原文和最新结果”。如果找到 PDF，会优先显示 PDF；否则显示 parsed_results/paper.md。</pre>
+            </article>
+            <article class="result-pane">
+              <div class="pane-title">
+                <h4>抽取结果 / Review</h4>
+                <span id="resultMeta">尚未载入</span>
+              </div>
+              <div class="result-summary" id="resultSummary"></div>
+              <div id="resultFieldList" class="field-result-list"></div>
+              <div id="resultReviewList" class="review-list"></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="cards">
+          <article>
+            <span>文献</span>
+            <strong id="paperCount">24</strong>
+          </article>
+          <article>
+            <span>文章字段</span>
+            <strong id="metadataFieldCount">0</strong>
+          </article>
+          <article>
+            <span>样品字段</span>
+            <strong id="sampleFieldCount">0</strong>
+          </article>
+          <article>
+            <span>状态字段</span>
+            <strong id="conditionFieldCount">0</strong>
+          </article>
+          <article>
+            <span>性质字段</span>
+            <strong id="propertyFieldCount">0</strong>
+          </article>
+          <article>
+            <span>图片字段</span>
+            <strong id="figureFieldCount">0</strong>
+          </article>
+        </section>
+
+        <section class="panel">
+            <div class="panel-title">
+              <h3>字段配置</h3>
+              <div class="field-config-actions">
+                <button id="btnExport" class="ghost">导出</button>
+                <button id="addFieldBtn" class="ghost">新增字段</button>
+              </div>
+            </div>
+            <div id="fieldLibraryPanel" class="field-library-panel">
+              <p class="mode-hint">从公共字段库勾选（写入项目覆盖层 selected_field_ids）</p>
+              <div id="fieldLibraryChecks" class="field-library-checks"></div>
+            </div>
+            <div class="field-columns five">
+              <div>
+                <h4>文章字段</h4>
+                <div id="metadataFields" class="chips"></div>
+              </div>
+              <div>
+                <h4>样品字段</h4>
+                <div id="sampleFields" class="chips"></div>
+              </div>
+              <div>
+                <h4>状态字段</h4>
+                <div id="conditionFields" class="chips"></div>
+              </div>
+              <div>
+                <h4>性质字段</h4>
+                <div id="propertyFields" class="chips"></div>
+              </div>
+              <div>
+                <h4>图片字段</h4>
+                <div id="figureFields" class="chips"></div>
+              </div>
+            </div>
+        </section>
+
+        <section class="grid two">
+          <article class="panel">
+            <h3>文章信息抽取</h3>
+            <pre id="metadataOutput"></pre>
+          </article>
+
+          <article class="panel">
+            <div class="panel-title">
+              <h3>完整抽取 Schema（按当前字段配置）</h3>
+              <button id="copySchemaBtn" class="ghost">复制 Schema</button>
+            </div>
+            <pre id="schemaPreview"></pre>
+          </article>
+        </section>
+
+        <section class="grid three">
+          <article class="panel">
+            <h3>样品-状态骨架（Stage1）</h3>
+            <pre id="entityOutput"></pre>
+          </article>
+          <article class="panel">
+            <h3>性能步骤输出（每步一次调用）</h3>
+            <pre id="propertyOutput"></pre>
+          </article>
+          <article class="panel">
+            <h3>人工 Review 视图</h3>
+            <div id="reviewList" class="review-list"></div>
+          </article>
+        </section>
+
+        <section class="panel">
+          <h3>图片信息抽取</h3>
+          <pre id="figureOutput"></pre>
+        </section>
+
+        <section class="grid two">
+          <article class="panel">
+            <div class="panel-title">
+              <h3>Prompt 整合预览</h3>
+              <button id="copyPromptBtn" class="ghost">复制预览</button>
+            </div>
+            <div class="tabs" id="promptTabs"></div>
+            <pre id="promptPreview"></pre>
+          </article>
+          <article class="panel">
+            <h3>配置变更记录</h3>
+            <div id="changeLog" class="review-list"></div>
+          </article>
+        </section>
+
+        <section class="panel">
+          <h3>只读快照 · 真实输出样例</h3>
+          <div id="snapshotPapers" class="paper-table"></div>
+        </section>
+      </section>
+    </main>
+
+    <dialog id="fieldDialog">
+      <form method="dialog" class="dialog-body">
+        <h3>新增抽取字段（私有）</h3>
+        <label>
+          字段名
+          <input id="fieldName" value="impact_toughness" />
+        </label>
+        <label>
+          层级
+          <select id="fieldLevel">
+            <option value="metadata">文章字段</option>
+            <option value="property">性质字段</option>
+            <option value="condition">状态字段</option>
+            <option value="sample">样品字段</option>
+            <option value="figure">图片字段</option>
+          </select>
+        </label>
+        <label>
+          抽取规则
+          <input id="fieldRule" value="抽取 Charpy impact toughness / impact energy 字段" />
+        </label>
+        <label>
+          正例
+          <input id="positiveExamples" value="Charpy, impact energy, impact toughness" />
+        </label>
+        <label>
+          反例
+          <input id="negativeExamples" value="fracture toughness, KIC, JIC" />
+        </label>
+        <div class="dialog-actions">
+          <button value="cancel" class="ghost">取消</button>
+          <button id="saveField" value="default" class="primary">加入当前项目</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="ruleDialog">
+      <form method="dialog" class="dialog-body">
+        <h3 id="ruleDialogTitle">字段抽取规则</h3>
+        <div id="ruleEditor" class="rule-editor">
+          <label>
+            抽取规则
+            <textarea id="editRuleText" rows="5"></textarea>
+          </label>
+          <label>
+            正例
+            <textarea id="editPositiveExamples" rows="3"></textarea>
+          </label>
+          <label>
+            反例
+            <textarea id="editNegativeExamples" rows="3"></textarea>
+          </label>
+          <fieldset class="rule-scope">
+            <legend>保存范围</legend>
+            <label class="radio-inline">
+              <input type="radio" name="ruleScope" id="ruleScopeProject" value="project" checked />
+              仅本项目
+            </label>
+            <label class="radio-inline">
+              <input type="radio" name="ruleScope" id="ruleScopeLibrary" value="library" />
+              写回公共库
+            </label>
+          </fieldset>
+        </div>
+        <div id="ruleDialogNote" class="rule-note"></div>
+        <div class="dialog-actions">
+          <button id="resetRuleOverride" value="default" class="ghost">恢复脚本规则</button>
+          <button value="cancel" class="ghost">关闭</button>
+          <button id="saveRuleOverride" value="default" class="primary">确认修改</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="newProjectDialog">
+      <form method="dialog" class="dialog-body wide">
+        <h3>新建项目</h3>
+        <label>
+          项目 ID
+          <input id="newProjectId" placeholder="例如 my_steel_project" />
+        </label>
+        <label>
+          显示名称
+          <input id="newProjectName" placeholder="我的钢铁项目" />
+        </label>
+        <label>
+          模板
+          <select id="newProjectTemplate">
+            <option value="steel">steel（钢铁）</option>
+            <option value="blank">blank（空模板，仅私有字段）</option>
+          </select>
+        </label>
+        <div>
+          <h4>勾选库字段</h4>
+          <div id="newProjectFieldChecks" class="field-library-checks"></div>
+        </div>
+        <div class="dialog-actions">
+          <button value="cancel" class="ghost">取消</button>
+          <button id="saveNewProject" value="default" class="primary">创建</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="./readonly_snapshot.js?v=20260827_task9"></script>
+    <script src="./app.js?v=20260827_task9"></script>
+  </body>
+</html>

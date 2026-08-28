@@ -1,0 +1,396 @@
+{
+  "project_id": "cuti",
+  "name": "钛铜",
+  "description": "钛铜 抽取配置（从历史脚本快照生成，按本项目性能维度拆成多步）。改 steps/fields/rules 即可调整。",
+  "composition_unit_default": "wt.%",
+  "fields": {
+    "metadata": [
+      "title",
+      "doi",
+      "material_system"
+    ],
+    "sample": [
+      "sample_name",
+      "product_form",
+      "alloy_family",
+      "composition",
+      "base_processing_description",
+      "sample_processing_overview",
+      "sample_microstructure_overview",
+      "sample_id",
+      "composition_unit"
+    ],
+    "condition": [
+      "condition_name",
+      "condition_type",
+      "condition_processing_description",
+      "microstructure",
+      "condition_id",
+      "sample_id",
+      "solution_treatment",
+      "microstructure_description",
+      "aging",
+      "cold_rolling",
+      "bending_performance"
+    ],
+    "property": [
+      "yield_strength",
+      "tensile_strength",
+      "elongation",
+      "hardness",
+      "conductivity",
+      "electrical_conductivity"
+    ],
+    "figure": [
+      "figure_id",
+      "placeholder_index",
+      "figure_type",
+      "is_microstructure_image",
+      "is_post_test_image",
+      "sample_id",
+      "condition_id",
+      "caption",
+      "scale_bar_info",
+      "image_purpose"
+    ]
+  },
+  "steps": [
+    {
+      "id": "entity",
+      "type": "entity",
+      "name": "Stage1 · 样品-状态骨架",
+      "desc": "只建立 sample/condition 索引，不抽性能"
+    },
+    {
+      "id": "mechanical",
+      "type": "property",
+      "name": "Stage2a · 力学性能",
+      "group": "mechanical_properties",
+      "fields": [
+        "yield_strength",
+        "tensile_strength",
+        "elongation",
+        "hardness"
+      ],
+      "desc": "单独一次调用，只补 mechanical_properties"
+    },
+    {
+      "id": "electrical",
+      "type": "property",
+      "name": "Stage2b · 电性能",
+      "group": "electrical_properties",
+      "fields": [
+        "conductivity",
+        "electrical_conductivity"
+      ],
+      "desc": "单独一次调用，只补 electrical_properties"
+    },
+    {
+      "id": "figures",
+      "type": "figure",
+      "name": "Stage3 · 图片分类过滤",
+      "desc": "组织图白名单过滤"
+    }
+  ],
+  "rules": {
+    "metadata.title": {
+      "rule": "字段定义：...",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。",
+      "source": "scripts/01_extract.py"
+    },
+    "metadata.material_system": {
+      "rule": "字段定义：合金体系简短描述（如 Cu-4Ti, Cu-3Ti-2Si-1.5Ni, Cu-Ti-Cr-Mg）",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.sample_name": {
+      "rule": "字段定义：论文中样品的原始命名（如 Cu-4Ti, Cu-3.5Ti, Cu-4Ti-1Cr）\n样品（sample）= 论文中**作为研究对象的合金实体**（化学成分独特或初始工艺独特）\n同一样品的不同热处理态/时效温度时间/冷变形量 → 属于 **conditions**，不是新样品",
+      "positive_examples": "例如：同一 Cu-4Ti 的 ST900 / A450-120min / CR50+A450 = **1 个样品 + 多个 conditions**\n例如：Cu-2.7Ti / Cu-3.5Ti / Cu-4.3Ti（Ti 含量不同）= 3 个样品",
+      "negative_examples": "**禁止**把原料/试剂/纳米粉末本身当成样品（如 Nb nanopowder、pure Cu rod、Ti sponge）——这些只是制备用料",
+      "note": "来自规则：样品识别（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.product_form": {
+      "rule": "字段定义：sheet | strip | foil | plate | bar | rod | wire | pipe | tube | forging | casting | powder | bulk | other\n推断优先级：论文明确声明 > 实验描述暗示 > 默认 other\n常见对应：sheet(薄板), strip(带材), foil(箔材), plate(厚板), bar/rod(棒材), wire(线材), pipe/tube(管材), forging(锻件), casting(铸件), powder(粉末), bulk(块体)",
+      "positive_examples": "",
+      "negative_examples": "必须从枚举值中选择，**禁止自创类别**\n无法确定 → other",
+      "note": "来自规则：product_form（sample 级）填写规则",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.alloy_family": {
+      "rule": "字段定义：Cu-Ti | Cu-Ti-Cr | Cu-Ti-Fe-Cr | Cu-Ti-Ni-Si | Cu-Ti-Cr-Mg-Si 等（见规则 §3）\n由**有意添加的合金元素**归一成族名短串，**不含含量数字**\n格式：二元写 `Cu-Ti`；多元写 `Cu-Ti-<其余元素按字母序>`，如 `Cu-Ti-Cr-Fe`、`Cu-Ti-Ni-Si`、`Cu-Ti-Cr-Mg-Si`\n只计设计合金元素，**忽略**杂质/偶然检出（如微量 Zn、意外 Fe）；若 Fe/Cr 等为论文明确添加的合金元素则计入\n每个 sample 必填；同族不同 Ti 含量仍共用同一 alloy_family（如 Cu-2.7Ti 与 Cu-4.3Ti 都是 `Cu-Ti`）",
+      "positive_examples": "例：Cu-3Ti → `Cu-Ti`；Cu-3Ti-0.2Fe-0.2Cr → `Cu-Ti-Cr-Fe`；Cu-3Ti-3Ni-0.5Si → `Cu-Ti-Ni-Si`；Cu-2.57Ti-0.35Cr-0.11Mg-0.04Si → `Cu-Ti-Cr-Mg-Si`",
+      "negative_examples": "",
+      "note": "来自规则：alloy_family（sample 级，极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.base_processing_description": {
+      "rule": "字段定义：样品级公共工艺：冶炼、铸造、热轧成材等所有 condition 共享的部分",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.sample_processing_overview": {
+      "rule": "字段定义：样品整体工艺关键参数（固定格式，去修饰词）：合金名、固溶/时效/冷轧等关键温度与时间、加工状态\n固定格式、去修饰词；各 ≤200 字符；显微手段仅弱标注",
+      "positive_examples": "processing 例：`\"Cu-4Ti, solution treated 900°C/1h WQ, cold rolled 50%, aged 450°C/120min\"`\nmicrostructure 例：`\"α-Cu + β'-Cu4Ti precipitates ~10 nm, grain size ~20 μm, cellular lamellae\"`",
+      "negative_examples": "",
+      "note": "来自规则：sample_processing_overview 与 sample_microstructure_overview",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.sample_microstructure_overview": {
+      "rule": "字段定义：样品整体组织关键特征（固定格式，去修饰词）：相组成、析出相（如 β'-Cu4Ti）、晶粒尺寸、组织形貌\n固定格式、去修饰词；各 ≤200 字符；显微手段仅弱标注",
+      "positive_examples": "processing 例：`\"Cu-4Ti, solution treated 900°C/1h WQ, cold rolled 50%, aged 450°C/120min\"`\nmicrostructure 例：`\"α-Cu + β'-Cu4Ti precipitates ~10 nm, grain size ~20 μm, cellular lamellae\"`",
+      "negative_examples": "",
+      "note": "来自规则：sample_processing_overview 与 sample_microstructure_overview",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.sample_id": {
+      "rule": "字段定义：S1\n样品（sample）= 论文中**作为研究对象的合金实体**（化学成分独特或初始工艺独特）\n同一样品的不同热处理态/时效温度时间/冷变形量 → 属于 **conditions**，不是新样品",
+      "positive_examples": "例如：同一 Cu-4Ti 的 ST900 / A450-120min / CR50+A450 = **1 个样品 + 多个 conditions**\n例如：Cu-2.7Ti / Cu-3.5Ti / Cu-4.3Ti（Ti 含量不同）= 3 个样品",
+      "negative_examples": "**禁止**把原料/试剂/纳米粉末本身当成样品（如 Nb nanopowder、pure Cu rod、Ti sponge）——这些只是制备用料",
+      "note": "来自规则：样品识别（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "sample.composition_unit": {
+      "rule": "字段定义：wt.%",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.condition_name": {
+      "rule": "字段定义：条件名（极简代号，如 ST900, A450-120min, CR50+A450, peak-aged, as-solution-treated）\n全文 conditions **≤15**；超了按上面优先级保留\n**必须用论文中给该条件起的简短代号**：ST900、A450-120min、CR50+A450、peak-aged、as-solution-treated 等",
+      "positive_examples": "反例：❌ condition_name = \"A450 (aged at 450°C for 120 min after 50% cold rolling)\"\n正例：✅ condition_name = \"A450\"",
+      "negative_examples": "**只建有明确性能数字的 condition**（正文/表中有 YS、UTS、EL、HV、EC、弯曲之一）；无性能数字的工艺态不要建\n时效/变形矩阵**禁止全表展开**；优先：as-ST、peak-aged、over-aged、文中最优/对比点、冷轧前后关键点\n**不要在 condition_name 中堆砌完整工艺描述**",
+      "note": "来自规则：condition 筛选（控制数量）\n来自规则：condition_name（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.condition_type": {
+      "rule": "字段定义：processing_condition | microstructure_condition | mechanical_test_condition | post_test_condition\n全文 conditions **≤15**；超了按上面优先级保留\n`processing_condition`: 不同工艺态（固溶/时效/冷轧/退火等）\n`microstructure_condition`: 仅描述组织态\n`mechanical_test_condition`: 拉伸等测试条件\n`post_test_condition`: 断后样品（fractured sample, post-tensile）",
+      "positive_examples": "",
+      "negative_examples": "**只建有明确性能数字的 condition**（正文/表中有 YS、UTS、EL、HV、EC、弯曲之一）；无性能数字的工艺态不要建\n时效/变形矩阵**禁止全表展开**；优先：as-ST、peak-aged、over-aged、文中最优/对比点、冷轧前后关键点",
+      "note": "来自规则：condition 筛选（控制数量）\n来自规则：condition_type 严格区分",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.condition_processing_description": {
+      "rule": "字段定义：定格式字段未覆盖的残余工艺细节（气氛、工序顺序补充等）；勿重复抄写温度/时间/压下率\n`solution_treatment`：`<T>/<t>, <cooling>`，冷却用 WQ/AC/FC；例 `\"900°C/4h, WQ\"`\n`aging`：`<T>/<t>`，多步用 ` + ` 拼接；例 `\"450°C/60min\"`、`\"300°C/2h + 450°C/7h\"`（温度统一 °C）\n`cold_rolling`：压下率，多级用 ` + `；例 `\"50%\"`、`\"85% + 90%\"`。仅冷轧，拉拔写入 description\nC1 (ST900): \"Ar atmosphere during solution treatment\"\nC2 (peak-aged): \"Aged after 97.5% cold rolling to 0.1 mm foil\"\nC3 (CR50+A450): \"Cold rolled after solution treatment, then aged\"\n样品级公共工艺（冶炼、铸造、热轧成材、均匀化）放到 sample.base_processing_description",
+      "positive_examples": "每个 condition 写自己独有的残余工艺细节，例如：",
+      "negative_examples": "均为短字符串；无明确信息则整字段省略（勿写 none/N/A）。取值必须对应该 condition 自身。\nT/t/压下率写入上述三字段；`condition_processing_description` 只补气氛、工序顺序、拉拔等残余信息，勿重复抄写\n**绝对不要**让所有 condition 共享同一段笼统工艺",
+      "note": "来自规则：solution_treatment / aging / cold_rolling（condition 级定格式文本）\n来自规则：condition_processing_description（必须随 condition 变化）",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.microstructure": {
+      "rule": "固定格式、去修饰词；各 ≤200 字符；显微手段仅弱标注",
+      "positive_examples": "processing 例：`\"Cu-4Ti, solution treated 900°C/1h WQ, cold rolled 50%, aged 450°C/120min\"`\nmicrostructure 例：`\"α-Cu + β'-Cu4Ti precipitates ~10 nm, grain size ~20 μm, cellular lamellae\"`",
+      "negative_examples": "",
+      "note": "来自规则：sample_processing_overview 与 sample_microstructure_overview",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.condition_id": {
+      "rule": "字段定义：C1\n全文 conditions **≤15**；超了按上面优先级保留\n**必须用论文中给该条件起的简短代号**：ST900、A450-120min、CR50+A450、peak-aged、as-solution-treated 等",
+      "positive_examples": "反例：❌ condition_name = \"A450 (aged at 450°C for 120 min after 50% cold rolling)\"\n正例：✅ condition_name = \"A450\"",
+      "negative_examples": "**只建有明确性能数字的 condition**（正文/表中有 YS、UTS、EL、HV、EC、弯曲之一）；无性能数字的工艺态不要建\n时效/变形矩阵**禁止全表展开**；优先：as-ST、peak-aged、over-aged、文中最优/对比点、冷轧前后关键点\n**不要在 condition_name 中堆砌完整工艺描述**",
+      "note": "来自规则：condition 筛选（控制数量）\n来自规则：condition_name（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.sample_id": {
+      "rule": "字段定义：S1",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.solution_treatment": {
+      "rule": "字段定义：定格式文本，例：900°C/4h, WQ（见规则 §7）\n`solution_treatment`：`<T>/<t>, <cooling>`，冷却用 WQ/AC/FC；例 `\"900°C/4h, WQ\"`\n`aging`：`<T>/<t>`，多步用 ` + ` 拼接；例 `\"450°C/60min\"`、`\"300°C/2h + 450°C/7h\"`（温度统一 °C）\n`cold_rolling`：压下率，多级用 ` + `；例 `\"50%\"`、`\"85% + 90%\"`。仅冷轧，拉拔写入 description",
+      "positive_examples": "",
+      "negative_examples": "均为短字符串；无明确信息则整字段省略（勿写 none/N/A）。取值必须对应该 condition 自身。\nT/t/压下率写入上述三字段；`condition_processing_description` 只补气氛、工序顺序、拉拔等残余信息，勿重复抄写",
+      "note": "来自规则：solution_treatment / aging / cold_rolling（condition 级定格式文本）",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.microstructure_description": {
+      "rule": "字段定义：该条件下的组织描述（相组成、析出相 β'-Cu4Ti、晶粒/位错等）",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.aging": {
+      "rule": "字段定义：定格式文本，例：450°C/60min 或 300°C/2h + 450°C/7h（见规则 §7）\n`solution_treatment`：`<T>/<t>, <cooling>`，冷却用 WQ/AC/FC；例 `\"900°C/4h, WQ\"`\n`aging`：`<T>/<t>`，多步用 ` + ` 拼接；例 `\"450°C/60min\"`、`\"300°C/2h + 450°C/7h\"`（温度统一 °C）\n`cold_rolling`：压下率，多级用 ` + `；例 `\"50%\"`、`\"85% + 90%\"`。仅冷轧，拉拔写入 description",
+      "positive_examples": "",
+      "negative_examples": "均为短字符串；无明确信息则整字段省略（勿写 none/N/A）。取值必须对应该 condition 自身。\nT/t/压下率写入上述三字段；`condition_processing_description` 只补气氛、工序顺序、拉拔等残余信息，勿重复抄写",
+      "note": "来自规则：solution_treatment / aging / cold_rolling（condition 级定格式文本）",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.cold_rolling": {
+      "rule": "字段定义：定格式文本，例：50% 或 85% + 90% + 95%（见规则 §7）\n`solution_treatment`：`<T>/<t>, <cooling>`，冷却用 WQ/AC/FC；例 `\"900°C/4h, WQ\"`\n`aging`：`<T>/<t>`，多步用 ` + ` 拼接；例 `\"450°C/60min\"`、`\"300°C/2h + 450°C/7h\"`（温度统一 °C）\n`cold_rolling`：压下率，多级用 ` + `；例 `\"50%\"`、`\"85% + 90%\"`。仅冷轧，拉拔写入 description",
+      "positive_examples": "",
+      "negative_examples": "均为短字符串；无明确信息则整字段省略（勿写 none/N/A）。取值必须对应该 condition 自身。\nT/t/压下率写入上述三字段；`condition_processing_description` 只补气氛、工序顺序、拉拔等残余信息，勿重复抄写",
+      "note": "来自规则：solution_treatment / aging / cold_rolling（condition 级定格式文本）",
+      "source": "scripts/01_extract.py"
+    },
+    "condition.bending_performance": {
+      "rule": "字段定义：按规则 §10 固定格式拼接；例：parallel to RD, 90° bend, no crack (t=0.15 mm, R/t=2)\n模板：`<direction>, <angle> bend, <result> (<t, R/t...>)`；定性可用 `loop bend, few microcracks`",
+      "positive_examples": "",
+      "negative_examples": "仅本文弯曲试验；引言泛谈则省略；≤100 字符",
+      "note": "来自规则：bending_performance",
+      "source": "scripts/01_extract.py"
+    },
+    "property.yield_strength": {
+      "rule": "只抽本文实测，不抽综述对比数据",
+      "positive_examples": "",
+      "negative_examples": "室温优先；单位按原文不换算；无则省略\n来源：正文/表格明确数字 > 图中清晰标注；禁止目估曲线、禁止内插中间成分",
+      "note": "来自规则：mechanical_properties / electrical_properties",
+      "source": "scripts/01_extract.py"
+    },
+    "property.tensile_strength": {
+      "rule": "只抽本文实测，不抽综述对比数据",
+      "positive_examples": "",
+      "negative_examples": "室温优先；单位按原文不换算；无则省略\n来源：正文/表格明确数字 > 图中清晰标注；禁止目估曲线、禁止内插中间成分",
+      "note": "来自规则：mechanical_properties / electrical_properties",
+      "source": "scripts/01_extract.py"
+    },
+    "property.elongation": {
+      "rule": "只抽本文实测，不抽综述对比数据",
+      "positive_examples": "",
+      "negative_examples": "室温优先；单位按原文不换算；无则省略\n来源：正文/表格明确数字 > 图中清晰标注；禁止目估曲线、禁止内插中间成分",
+      "note": "来自规则：mechanical_properties / electrical_properties",
+      "source": "scripts/01_extract.py"
+    },
+    "property.hardness": {
+      "rule": "只抽本文实测，不抽综述对比数据",
+      "positive_examples": "",
+      "negative_examples": "室温优先；单位按原文不换算；无则省略\n来源：正文/表格明确数字 > 图中清晰标注；禁止目估曲线、禁止内插中间成分",
+      "note": "来自规则：mechanical_properties / electrical_properties",
+      "source": "scripts/01_extract.py"
+    },
+    "property.conductivity": {
+      "rule": "只抽本文实测，不抽综述对比数据",
+      "positive_examples": "",
+      "negative_examples": "室温优先；单位按原文不换算；无则省略\n来源：正文/表格明确数字 > 图中清晰标注；禁止目估曲线、禁止内插中间成分",
+      "note": "来自规则：mechanical_properties / electrical_properties",
+      "source": "scripts/01_extract.py"
+    },
+    "property.electrical_conductivity": {
+      "rule": "只抽本文实测，不抽综述对比数据",
+      "positive_examples": "",
+      "negative_examples": "室温优先；单位按原文不换算；无则省略\n来源：正文/表格明确数字 > 图中清晰标注；禁止目估曲线、禁止内插中间成分",
+      "note": "来自规则：mechanical_properties / electrical_properties",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.figure_id": {
+      "rule": "字段定义：Figure 1a\n必须从 caption 或正文中明确判断每张图属于哪个 sample 和 condition\ncaption 中提到 \"(a) sample X, (b) sample Y\" → panel a/b 分别对应不同 sample\n多 panel 图为每个 panel 输出独立 figures 条目（figure_id=\"Figure 1a\"、\"Figure 1b\" 等）",
+      "positive_examples": "",
+      "negative_examples": "无法判断归属时：sample_id = null",
+      "note": "来自规则：Figure → Sample 映射",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.placeholder_index": {
+      "rule": "必须与文本中的 [FIGURE_PLACEHOLDER_n] 编号一致",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自规则：placeholder_index",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.figure_type": {
+      "rule": "字段定义：OM | SEM | TEM | EBSD | XRD | stress_strain_curve | schematic | other\nOM = 光学显微（optical micrograph，通常有颜色或灰度晶界）\nSEM = 扫描电镜（高分辨灰度组织/断口）\nTEM = 透射电镜（黑白衍衬像，含位错、析出相、SAED）\nEBSD = 反极图/取向图（彩色 IPF）\nXRD = X射线衍射图（曲线图，有 2θ 横坐标）\n注意：论文偶有把 SEM 写成 EPMA 的错误，请以图像内容为准\n`is_microstructure_image=true` 且 `is_post_test_image=false`：组织观察图（before-test）\n`is_post_test_image=true`：断后断口、断后 TEM/SEM（fractured sample 的所有图）、力学曲线\nXRD 衍射图、示意图、力学曲线 → is_microstructure_image=false",
+      "positive_examples": "caption 含 \"fractured\"、\"post-test\"、\"after tensile\"、\"interrupted tensile\"、\"deformed to fracture\" 等 → 必为 is_post_test_image=true",
+      "negative_examples": "",
+      "note": "来自规则：图片类型判定（看图本身 + 看 caption）\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.is_microstructure_image": {
+      "rule": "OM = 光学显微（optical micrograph，通常有颜色或灰度晶界）\nSEM = 扫描电镜（高分辨灰度组织/断口）\nTEM = 透射电镜（黑白衍衬像，含位错、析出相、SAED）\nEBSD = 反极图/取向图（彩色 IPF）\nXRD = X射线衍射图（曲线图，有 2θ 横坐标）\n注意：论文偶有把 SEM 写成 EPMA 的错误，请以图像内容为准\n`is_microstructure_image=true` 且 `is_post_test_image=false`：组织观察图（before-test）\n`is_post_test_image=true`：断后断口、断后 TEM/SEM（fractured sample 的所有图）、力学曲线\nXRD 衍射图、示意图、力学曲线 → is_microstructure_image=false",
+      "positive_examples": "caption 含 \"fractured\"、\"post-test\"、\"after tensile\"、\"interrupted tensile\"、\"deformed to fracture\" 等 → 必为 is_post_test_image=true",
+      "negative_examples": "",
+      "note": "来自规则：图片类型判定（看图本身 + 看 caption）\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.is_post_test_image": {
+      "rule": "OM = 光学显微（optical micrograph，通常有颜色或灰度晶界）\nSEM = 扫描电镜（高分辨灰度组织/断口）\nTEM = 透射电镜（黑白衍衬像，含位错、析出相、SAED）\nEBSD = 反极图/取向图（彩色 IPF）\nXRD = X射线衍射图（曲线图，有 2θ 横坐标）\n注意：论文偶有把 SEM 写成 EPMA 的错误，请以图像内容为准\n`is_microstructure_image=true` 且 `is_post_test_image=false`：组织观察图（before-test）\n`is_post_test_image=true`：断后断口、断后 TEM/SEM（fractured sample 的所有图）、力学曲线\nXRD 衍射图、示意图、力学曲线 → is_microstructure_image=false",
+      "positive_examples": "caption 含 \"fractured\"、\"post-test\"、\"after tensile\"、\"interrupted tensile\"、\"deformed to fracture\" 等 → 必为 is_post_test_image=true",
+      "negative_examples": "",
+      "note": "来自规则：图片类型判定（看图本身 + 看 caption）\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.sample_id": {
+      "rule": "字段定义：S1\n必须从 caption 或正文中明确判断每张图属于哪个 sample 和 condition\ncaption 中提到 \"(a) sample X, (b) sample Y\" → panel a/b 分别对应不同 sample\n多 panel 图为每个 panel 输出独立 figures 条目（figure_id=\"Figure 1a\"、\"Figure 1b\" 等）",
+      "positive_examples": "",
+      "negative_examples": "无法判断归属时：sample_id = null",
+      "note": "来自规则：Figure → Sample 映射",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.condition_id": {
+      "rule": "字段定义：C1\n必须从 caption 或正文中明确判断每张图属于哪个 sample 和 condition\ncaption 中提到 \"(a) sample X, (b) sample Y\" → panel a/b 分别对应不同 sample\n多 panel 图为每个 panel 输出独立 figures 条目（figure_id=\"Figure 1a\"、\"Figure 1b\" 等）",
+      "positive_examples": "",
+      "negative_examples": "无法判断归属时：sample_id = null",
+      "note": "来自规则：Figure → Sample 映射",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.caption": {
+      "rule": "字段定义：图片标题\nOM = 光学显微（optical micrograph，通常有颜色或灰度晶界）\nSEM = 扫描电镜（高分辨灰度组织/断口）\nTEM = 透射电镜（黑白衍衬像，含位错、析出相、SAED）\nEBSD = 反极图/取向图（彩色 IPF）\nXRD = X射线衍射图（曲线图，有 2θ 横坐标）\n注意：论文偶有把 SEM 写成 EPMA 的错误，请以图像内容为准\n`is_microstructure_image=true` 且 `is_post_test_image=false`：组织观察图（before-test）\n`is_post_test_image=true`：断后断口、断后 TEM/SEM（fractured sample 的所有图）、力学曲线\nXRD 衍射图、示意图、力学曲线 → is_microstructure_image=false",
+      "positive_examples": "caption 含 \"fractured\"、\"post-test\"、\"after tensile\"、\"interrupted tensile\"、\"deformed to fracture\" 等 → 必为 is_post_test_image=true",
+      "negative_examples": "",
+      "note": "来自规则：图片类型判定（看图本身 + 看 caption）\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）",
+      "source": "scripts/01_extract.py"
+    },
+    "figure.image_purpose": {
+      "rule": "字段定义：before_test_microstructure | sample_level_microstructure | heat_treated_microstructure | post_test_fractography | fracture_surface | mechanical_curve | diffraction | schematic | other\nOM = 光学显微（optical micrograph，通常有颜色或灰度晶界）\nSEM = 扫描电镜（高分辨灰度组织/断口）\nTEM = 透射电镜（黑白衍衬像，含位错、析出相、SAED）\nEBSD = 反极图/取向图（彩色 IPF）\nXRD = X射线衍射图（曲线图，有 2θ 横坐标）\n注意：论文偶有把 SEM 写成 EPMA 的错误，请以图像内容为准\n`is_microstructure_image=true` 且 `is_post_test_image=false`：组织观察图（before-test）\n`is_post_test_image=true`：断后断口、断后 TEM/SEM（fractured sample 的所有图）、力学曲线\nXRD 衍射图、示意图、力学曲线 → is_microstructure_image=false",
+      "positive_examples": "caption 含 \"fractured\"、\"post-test\"、\"after tensile\"、\"interrupted tensile\"、\"deformed to fracture\" 等 → 必为 is_post_test_image=true",
+      "negative_examples": "",
+      "note": "来自规则：图片类型判定（看图本身 + 看 caption）\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）",
+      "source": "scripts/01_extract.py"
+    }
+  },
+  "property_source": {
+    "allow": [
+      "measured_table",
+      "measured_text",
+      "example_table"
+    ],
+    "deny": [
+      "abstract_target",
+      "claim_range",
+      "generalized_threshold",
+      "figure_ocr",
+      "curve_estimate"
+    ],
+    "deny_phrase_patterns": [
+      "above",
+      "below",
+      "target",
+      "at least",
+      "no less than",
+      "以上",
+      "以下",
+      "不低于",
+      "目标",
+      "优选"
+    ]
+  },
+  "figure_filter": {
+    "keep_types": [
+      "OM",
+      "SEM",
+      "TEM",
+      "EBSD"
+    ],
+    "drop_types": [
+      "XRD",
+      "SAED",
+      "EDS",
+      "EDX",
+      "EPMA",
+      "stress_strain_curve",
+      "hysteresis_loop",
+      "schematic",
+      "other"
+    ],
+    "drop_if_post_test": true,
+    "require_microstructure": true
+  }
+}

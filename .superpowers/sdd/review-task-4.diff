@@ -1,0 +1,252 @@
+# Review Task 4
+===== tests/test_validate_provenance.py =====
+--- /dev/null	2026-07-31 14:41:21.307720081 +0000
++++ /internfs/wangchenyan/shougang/steel_extract_tool_workspace/tests/test_validate_provenance.py	2026-08-27 14:55:07.259289943 +0000
+@@ -0,0 +1,25 @@
++from tools.pipeline import validate_properties
++
++CFG = {
++    "property_source": {"allow": ["measured_table"], "deny": ["abstract_target"], "deny_phrase_patterns": ["above"]},
++    "fields": {"property": ["yield_strength"]},
++}
++
++
++def test_keeps_excerpt_on_clean_value():
++    props = [{"condition_id": "C1", "yield_strength": {
++        "value": "685", "unit": "MPa", "source": "measured_table",
++        "excerpt": "A-700 is 685 MPa", "location": "Table 2"}}]
++    cleaned, warnings = validate_properties(props, CFG)
++    assert cleaned[0]["yield_strength"]["excerpt"] == "A-700 is 685 MPa"
++    assert cleaned[0]["yield_strength"]["location"] == "Table 2"
++    assert warnings == []
++
++
++def test_rejected_value_listed_with_excerpt():
++    props = [{"condition_id": "C4", "yield_strength": {
++        "value": "600", "unit": "MPa", "source": "abstract_target",
++        "excerpt": "above 600 MPa", "location": "Abstract"}}]
++    cleaned, warnings = validate_properties(props, CFG)
++    assert "yield_strength" not in cleaned[0]
++    assert warnings[0]["excerpt"] == "above 600 MPa"
+===== pipeline.py load_field_config + validate + prompt + single_pass =====
+"""配置驱动的分阶段文献抽取 pipeline。
+
+流程（对应分享里的方法论）：
+    输入剪裁 -> Stage1 样品-状态骨架 -> Stage2 基于 condition 补性能
+    -> 图片单独分类过滤 -> 规则校验兜底 -> 合并导出
+
+设计要点：
+- 字段和规则来自 configs/fields/<project>.json，改配置即可换领域；
+- Stage2 只允许给 Stage1 已有的 condition 补性能，不新增样品/状态；
+- 性能值按来源白/黑名单做规则校验，剔除「摘要目标/权利要求范围」等非实测来源；
+- 图片按类型白名单过滤，剔除 XRD/衍射/示意图等非组织图；
+- 每一阶段落一个中间产物，便于反查。
+
+mode:
+    two_stage    完整两阶段 + 规则校验 + 图片过滤（推荐）
+    entity_only  只建样品-状态骨架
+    single_pass  模拟 one-shot：抽完但不做规则校验/图片过滤（用于对比「优化前」）
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from config_model import (  # noqa: E402
+    effective_fields,
+    generate_steps,
+    load_field_library,
+    load_template,
+)
+from input_trim import trim_input  # noqa: E402
+from llm_backends import get_backend  # noqa: E402
+from paper_parser import parse_paper_md  # noqa: E402
+
+
+# ---------------------------------------------------------------------------
+# 配置加载
+# ---------------------------------------------------------------------------
+def load_workspace_config(root: Path) -> dict:
+    cfg_path = Path(root) / "configs" / "project_config.json"
+    return json.loads(cfg_path.read_text(encoding="utf-8"))
+
+
+def load_field_config(root: Path, project_cfg: dict) -> dict:
+    """有 overlay 时从 config_model 合成旧结构；否则回退读 field_config 文件。"""
+    root = Path(root)
+    overlay_rel = project_cfg.get("overlay")
+    if overlay_rel:
+        overlay_path = root / overlay_rel
+        if overlay_path.exists():
+            overlay = json.loads(overlay_path.read_text(encoding="utf-8"))
+            template_id = overlay.get("template_id") or project_cfg.get("template_id", "blank")
+            template = load_template(root, template_id)
+            library = load_field_library(root, template_id)
+            effective = effective_fields(library, overlay)
+            fields_by_cat = {
+                "metadata": [], "sample": [], "condition": [], "property": [], "figure": [],
+            }
+            rules = {}
+            for f in effective:
+                cat = f.get("category") or "property"
+                fields_by_cat.setdefault(cat, []).append(f["id"])
+                rules[f"{cat}.{f['id']}"] = {
+                    "rule": f.get("rule", ""),
+                    "positive_examples": f.get("positive_examples", ""),
+                    "negative_examples": f.get("negative_examples", ""),
+                    "note": f.get("note", ""),
+                }
+            return {
+                "fields": fields_by_cat,
+                "rules": rules,
+                "steps": generate_steps(template, effective, overlay),
+                "property_source": overlay.get("property_source", {}),
+                "figure_filter": overlay.get("figure_filter", {}),
+                "template_id": template_id,
+                "domain_hint": template.get("domain_hint") or "材料文献",
+            }
+    rel = project_cfg.get("field_config")
+    if not rel:
+        return {"fields": {}, "rules": {}, "property_source": {}, "figure_filter": {}}
+    path = root / rel
+    if not path.exists():
+        return {"fields": {}, "rules": {}, "property_source": {}, "figure_filter": {}}
+    return json.loads(path.read_text(encoding="utf-8"))
+...
+
+def build_entity_prompt(field_config: dict, text: str) -> str:
+    fields = field_config.get("fields", {})
+    rules = field_config.get("rules", {})
+    domain_hint = field_config.get("domain_hint") or "材料文献"
+    rule_keys = [f"sample.{f}" for f in fields.get("sample", [])] + \
+                [f"condition.{f}" for f in fields.get("condition", [])]
+    schema = {
+        "paper_metadata": {f: "..." for f in fields.get("metadata", [])},
+        "samples": [{f: "..." for f in fields.get("sample", [])}],
+        "conditions": [{f: "..." for f in fields.get("condition", [])}],
+        "figures": [{f: "..." for f in fields.get("figure", [])}],
+    }
+    return f"""[Stage 1 · 样品-状态骨架]
+你是{domain_hint}结构化抽取专家。本阶段只建立样品与状态的索引，不抽具体性能数值。
+严格输出如下 JSON（不要 markdown 代码块，第一个字符是 {{）：
+
+{json.dumps(schema, ensure_ascii=False, indent=2)}
+
+## 抽取规则
+{_fmt_rules(rules, rule_keys)}
+...
+
+
+def get_steps(field_config: dict) -> list:
+    """返回抽取步骤序列；未配置 steps 时按 fields 合成默认序列（向后兼容）。"""
+    steps = field_config.get("steps")
+    if steps:
+        return steps
+    fields = field_config.get("fields", {})
+    out = [{"id": "entity", "type": "entity", "name": "Stage1 · 样品-状态骨架"}]
+    if fields.get("property"):
+        out.append({"id": "property", "type": "property", "name": "Stage2 · 性能",
+                    "group": "properties", "fields": fields["property"]})
+    if fields.get("figure"):
+        out.append({"id": "figures", "type": "figure", "name": "Stage3 · 图片分类"})
+    return out
+
+
+# ---------------------------------------------------------------------------
+# 规则校验
+# ---------------------------------------------------------------------------
+def validate_properties(properties: list, field_config: dict) -> tuple[list, list]:
+    """按来源白/黑名单剔除不可靠性能值，返回(清洗后, 警告列表)。"""
+    src = field_config.get("property_source", {})
+    deny = set(src.get("deny", []))
+    deny_phrases = [p.lower() for p in src.get("deny_phrase_patterns", [])]
+    prop_fields = field_config.get("fields", {}).get("property", [])
+    warnings = []
+    cleaned = []
+    for row in properties or []:
+        cid = row.get("condition_id")
+        new_row = {"condition_id": cid}
+        for f in prop_fields:
+            val = row.get(f)
+            if not isinstance(val, dict) or val.get("value") in (None, ""):
+                continue
+            source = str(val.get("source", "")).lower()
+            evidence = str(val.get("evidence", "")).lower()
+            bad = source in deny or any(p in source or p in evidence for p in deny_phrases)
+            if bad:
+                warnings.append({
+                    "type": "property_source_rejected",
+                    "condition_id": cid,
+                    "field": f,
+                    "value": val.get("value"),
+                    "unit": val.get("unit"),
+                    "source": val.get("source"),
+                    "excerpt": val.get("excerpt", ""),
+                    "location": val.get("location", ""),
+                    "detail": f"{cid}.{f}={val.get('value')} 来源不可靠({val.get('source')})，已剔除",
+                })
+                continue
+            new_row[f] = {
+                "value": val.get("value"),
+                "unit": val.get("unit", ""),
+                "source": val.get("source", ""),
+                "excerpt": val.get("excerpt", ""),
+                "location": val.get("location", ""),
+            }
+        cleaned.append(new_row)
+    return cleaned, warnings
+
+
+def classify_figures(figures: list, field_config: dict, apply_filter: bool) -> tuple[list, list]:
+    """按类型白名单过滤图片。apply_filter=False 时保留全部（模拟 one-shot）。"""
+    ff = field_config.get("figure_filter", {})
+    keep_types = set(ff.get("keep_types", []))
+...
+            if mode == "entity_only":
+                continue
+            group = step.get("group", "properties")
+            prompt = build_property_prompt(field_config, step, condition_ids)
+            prompts[sid] = prompt
+            (run_dir / "prompt_preview" / f"{sid}_prompt.txt").write_text(prompt, encoding="utf-8")
+            raw = backend.call_json(
+                "钢铁材料文献抽取专家", prompt, None,
+                hint={"stage": "property", "step_id": sid, "paper_id": paper_id},
+            )
+            (run_dir / "properties" / f"{sid}_raw.json").write_text(
+                json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+            raw_props = raw.get("properties", [])
+            step_warnings: list = []
+            step_field_cfg = {
+                "property_source": field_config.get("property_source", {}),
+                "fields": {"property": step.get("fields", [])},
+            }
+            if apply_rules:
+                cleaned, step_warnings = validate_properties(raw_props, step_field_cfg)
+            else:
+                cleaned = [
+                    {"condition_id": r.get("condition_id"),
+                     **{k: {
+                         "value": v.get("value"),
+                         "unit": v.get("unit", ""),
+                         "source": v.get("source", ""),
+                         "excerpt": v.get("excerpt", ""),
+                         "location": v.get("location", ""),
+                     }
+                        for k, v in r.items() if k != "condition_id" and isinstance(v, dict)}}
+                    for r in raw_props
+                ]
+            property_groups[group] = cleaned
+            warnings.extend(step_warnings)
+            (run_dir / "properties" / f"{sid}_clean.json").write_text(
+                json.dumps(cleaned, ensure_ascii=False, indent=2), encoding="utf-8")
+            step_reports.append({
+                "id": sid, "name": sname, "type": stype, "group": group,
+                "output": cleaned, "warnings": step_warnings,
+            })

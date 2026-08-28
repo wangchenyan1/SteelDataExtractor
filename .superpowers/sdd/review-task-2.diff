@@ -1,0 +1,483 @@
+# Review package: Task 2
+
+## Files
+/internfs/wangchenyan/shougang/steel_extract_tool_workspace/configs/field_library:
+total 18
+drwxr-xr-x 2 root root   4096 Aug 27 14:44 .
+drwxr-xr-x 6  501 staff  4096 Aug 27 14:44 ..
+-rw-r--r-- 1 root root  10425 Aug 27 14:44 steel.json
+
+/internfs/wangchenyan/shougang/steel_extract_tool_workspace/configs/projects:
+total 3
+drwxr-xr-x 2 root root  4096 Aug 27 14:45 .
+drwxr-xr-x 6  501 staff 4096 Aug 27 14:44 ..
+-rw-r--r-- 1 root root  1283 Aug 27 14:45 demo_steel.json
+
+/internfs/wangchenyan/shougang/steel_extract_tool_workspace/configs/templates:
+total 3
+drwxr-xr-x 2 root root  4096 Aug 27 14:44 .
+drwxr-xr-x 6  501 staff 4096 Aug 27 14:44 ..
+-rw-r--r-- 1 root root   765 Aug 27 14:44 blank.json
+-rw-r--r-- 1 root root   912 Aug 27 14:44 steel.json
+
+## Diff (config_model + tests + project_config + overlays/templates)
+===== tools/config_model.py =====
+--- /dev/null	2026-07-31 14:41:21.307720081 +0000
++++ /internfs/wangchenyan/shougang/steel_extract_tool_workspace/tools/config_model.py	2026-08-27 14:45:20.900681000 +0000
+@@ -0,0 +1,198 @@
++"""Template / field library / project overlay config model."""
++
++from __future__ import annotations
++
++import json
++from copy import deepcopy
++from pathlib import Path
++from typing import Any
++
++_FIELD_KEYS = (
++    "id",
++    "label",
++    "category",
++    "group",
++    "origin",
++    "value_type",
++    "rule",
++    "positive_examples",
++    "negative_examples",
++    "note",
++)
++
++
++def _read_json(path: Path) -> Any:
++    return json.loads(path.read_text(encoding="utf-8"))
++
++
++def _write_json(path: Path, data: Any) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
++
++
++def load_template(root: Path, template_id: str) -> dict:
++    path = root / "configs" / "templates" / f"{template_id}.json"
++    return _read_json(path)
++
++
++def load_field_library(root: Path, template_id: str) -> dict:
++    if template_id == "blank":
++        return {"fields": []}
++    path = root / "configs" / "field_library" / f"{template_id}.json"
++    return _read_json(path)
++
++
++def load_overlay(root: Path, project_id: str) -> dict:
++    path = root / "configs" / "projects" / f"{project_id}.json"
++    return _read_json(path)
++
++
++def _normalize_field(base: dict, overrides: dict | None, origin: str) -> dict:
++    merged = {**base, **(overrides or {})}
++    out = {k: merged.get(k) for k in _FIELD_KEYS if k != "origin"}
++    out["origin"] = origin
++    return out
++
++
++def effective_fields(library: dict, overlay: dict) -> list[dict]:
++    by_id = {f["id"]: f for f in library.get("fields", [])}
++    overrides = overlay.get("field_overrides") or {}
++    selected = overlay.get("selected_field_ids") or []
++    result: list[dict] = []
++    for fid in selected:
++        if fid not in by_id:
++            continue
++        result.append(_normalize_field(by_id[fid], overrides.get(fid), "library"))
++    for priv in overlay.get("private_fields") or []:
++        result.append(_normalize_field(priv, None, "private"))
++    return result
++
++
++def identity_field_ids(template: dict) -> set[str]:
++    return set(template.get("identity_fields") or [])
++
++
++def generate_steps(template: dict, fields: list[dict], overlay: dict) -> list[dict]:
++    overrides = overlay.get("step_overrides")
++    if overrides:
++        steps = list(overrides)
++        entity_idx = next((i for i, s in enumerate(steps) if s.get("type") == "entity"), None)
++        if entity_idx is None:
++            raise ValueError("骨架步必须先于性能和图片")
++        for i, s in enumerate(steps):
++            if s.get("type") in ("property", "figure") and i < entity_idx:
++                raise ValueError("骨架步必须先于性能和图片")
++        return steps
++
++    steps: list[dict] = [{"id": "entity", "type": "entity", "name": "骨架"}]
++
++    group_fields: dict[str, list[str]] = {}
++    for f in fields:
++        g = f.get("group")
++        if g:
++            group_fields.setdefault(g, []).append(f["id"])
++
++    group_names = {g["id"]: g.get("name", g["id"]) for g in template.get("property_groups") or []}
++    for ginfo in template.get("property_groups") or []:
++        gid = ginfo["id"]
++        if gid not in group_fields:
++            continue
++        step_id = gid.removesuffix("_properties")
++        steps.append(
++            {
++                "id": step_id,
++                "type": "property",
++                "name": group_names.get(gid, gid),
++                "group": gid,
++                "fields": group_fields[gid],
++            }
++        )
++
++    if any(f.get("category") == "figure" for f in fields):
++        steps.append({"id": "figures", "type": "figure", "name": "图片过滤"})
++
++    return steps
++
++
++def save_overlay(root: Path, project_id: str, overlay: dict) -> None:
++    path = root / "configs" / "projects" / f"{project_id}.json"
++    _write_json(path, overlay)
++
++
++def writeback_library_field(root: Path, template_id: str, field: dict) -> None:
++    path = root / "configs" / "field_library" / f"{template_id}.json"
++    lib = _read_json(path)
++    fields = lib.setdefault("fields", [])
++    fid = field["id"]
++    for i, existing in enumerate(fields):
++        if existing.get("id") == fid:
++            updated = {**existing, **field}
++            fields[i] = updated
++            break
++    else:
++        fields.append(field)
++    _write_json(path, lib)
++
++
++def promote_private_field(root: Path, project_id: str, field_id: str) -> dict:
++    overlay = load_overlay(root, project_id)
++    private = list(overlay.get("private_fields") or [])
++    match = None
++    remaining = []
++    for f in private:
++        if f.get("id") == field_id:
++            match = f
++        else:
++            remaining.append(f)
++    if match is None:
++        raise ValueError(f"private field not found: {field_id}")
++
++    template_id = overlay["template_id"]
++    lib_field = {k: match.get(k) for k in (
++        "id", "label", "category", "group", "value_type",
++        "rule", "positive_examples", "negative_examples", "note",
++    )}
++    writeback_library_field(root, template_id, lib_field)
++
++    selected = list(overlay.get("selected_field_ids") or [])
++    if field_id not in selected:
++        selected.append(field_id)
++    overlay["selected_field_ids"] = selected
++    overlay["private_fields"] = remaining
++    save_overlay(root, project_id, overlay)
++    return overlay
++
++
++def create_project(
++    root: Path,
++    project_id: str,
++    name: str,
++    template_id: str,
++    selected_field_ids: list[str],
++) -> dict:
++    overlay = {
++        "template_id": template_id,
++        "selected_field_ids": list(selected_field_ids),
++        "private_fields": [],
++        "field_overrides": {},
++        "step_overrides": None,
++        "property_source": {},
++        "figure_filter": {},
++    }
++    save_overlay(root, project_id, overlay)
++
++    cfg_path = root / "configs" / "project_config.json"
++    cfg = _read_json(cfg_path) if cfg_path.exists() else {"projects": {}}
++    projects = cfg.setdefault("projects", {})
++    projects[project_id] = {
++        "name": name,
++        "runnable": True,
++        "backend": "mock",
++        "template_id": template_id,
++        "overlay": f"configs/projects/{project_id}.json",
++        "field_config": f"configs/projects/{project_id}.json",
++        "parsed_results": f"parsed_results/{project_id}",
++        "test_runs": f"test_runs/{project_id}",
++    }
++    _write_json(cfg_path, cfg)
++    return overlay
+===== tests/test_config_model.py =====
+--- /dev/null	2026-07-31 14:41:21.307720081 +0000
++++ /internfs/wangchenyan/shougang/steel_extract_tool_workspace/tests/test_config_model.py	2026-08-27 14:43:38.726086000 +0000
+@@ -0,0 +1,93 @@
++# tests/test_config_model.py
++from pathlib import Path
++import json
++import shutil
++import tempfile
++from tools import config_model as cm
++
++ROOT = Path("/internfs/wangchenyan/shougang/steel_extract_tool_workspace")
++
++
++def test_demo_effective_fields_and_steps():
++    overlay = cm.load_overlay(ROOT, "demo_steel")
++    lib = cm.load_field_library(ROOT, "steel")
++    fields = cm.effective_fields(lib, overlay)
++    ids = [f["id"] for f in fields]
++    assert "title" in ids
++    assert "yield_strength" in ids
++    assert "permeability" in ids
++    tmpl = cm.load_template(ROOT, "steel")
++    steps = cm.generate_steps(tmpl, fields, overlay)
++    types = [s["type"] for s in steps]
++    assert types[0] == "entity"
++    assert "property" in types
++    assert types[-1] == "figure"
++    groups = [s.get("group") for s in steps if s["type"] == "property"]
++    assert "mechanical_properties" in groups
++    assert "magnetic_properties" in groups
++
++
++def test_unselected_group_omits_step():
++    overlay = cm.load_overlay(ROOT, "demo_steel")
++    overlay = dict(overlay)
++    overlay["selected_field_ids"] = [i for i in overlay["selected_field_ids"] if i != "permeability"]
++    lib = cm.load_field_library(ROOT, "steel")
++    fields = cm.effective_fields(lib, overlay)
++    steps = cm.generate_steps(cm.load_template(ROOT, "steel"), fields, overlay)
++    groups = [s.get("group") for s in steps if s["type"] == "property"]
++    assert "magnetic_properties" not in groups
++    assert "mechanical_properties" in groups
++
++
++def test_overlay_does_not_write_library(tmp_path: Path):
++    # copy steel library into tmp workspace layout
++    ws = tmp_path
++    (ws / "configs/field_library").mkdir(parents=True)
++    (ws / "configs/projects").mkdir(parents=True)
++    (ws / "configs/templates").mkdir(parents=True)
++    shutil.copy(ROOT / "configs/field_library/steel.json", ws / "configs/field_library/steel.json")
++    shutil.copy(ROOT / "configs/templates/steel.json", ws / "configs/templates/steel.json")
++    overlay = json.loads((ROOT / "configs/projects/demo_steel.json").read_text())
++    overlay["field_overrides"] = {"title": {"rule": "PROJECT ONLY RULE"}}
++    (ws / "configs/projects/demo_steel.json").write_text(json.dumps(overlay), encoding="utf-8")
++    lib_before = (ws / "configs/field_library/steel.json").read_text()
++    cm.save_overlay(ws, "demo_steel", overlay)
++    assert (ws / "configs/field_library/steel.json").read_text() == lib_before
++    fields = cm.effective_fields(cm.load_field_library(ws, "steel"), cm.load_overlay(ws, "demo_steel"))
++    title = next(f for f in fields if f["id"] == "title")
++    assert title["rule"] == "PROJECT ONLY RULE"
++
++
++def test_writeback_updates_library(tmp_path: Path):
++    ws = tmp_path
++    (ws / "configs/field_library").mkdir(parents=True)
++    shutil.copy(ROOT / "configs/field_library/steel.json", ws / "configs/field_library/steel.json")
++    cm.writeback_library_field(ws, "steel", {"id": "title", "rule": "NEW LIB RULE", "label": "文献名称",
++                                            "category": "metadata", "group": None, "value_type": "string",
++                                            "positive_examples": "", "negative_examples": "", "note": ""})
++    lib = cm.load_field_library(ws, "steel")
++    title = next(f for f in lib["fields"] if f["id"] == "title")
++    assert title["rule"] == "NEW LIB RULE"
++
++
++def test_blank_library_is_empty():
++    lib = cm.load_field_library(ROOT, "blank")
++    assert lib["fields"] == []
++
++
++def test_create_project_selects_subset(tmp_path: Path):
++    ws = tmp_path
++    for sub in ("configs/templates", "configs/field_library", "configs/projects"):
++        (ws / sub).mkdir(parents=True)
++    shutil.copy(ROOT / "configs/templates/steel.json", ws / "configs/templates/steel.json")
++    shutil.copy(ROOT / "configs/field_library/steel.json", ws / "configs/field_library/steel.json")
++    (ws / "configs/project_config.json").write_text(json.dumps({
++        "default_project": "demo_steel", "projects": {}
++    }), encoding="utf-8")
++    cm.create_project(ws, "mini", "力学子集", "steel", ["title", "sample_id", "yield_strength"])
++    overlay = cm.load_overlay(ws, "mini")
++    assert overlay["selected_field_ids"] == ["title", "sample_id", "yield_strength"]
++    steps = cm.generate_steps(cm.load_template(ws, "steel"),
++                              cm.effective_fields(cm.load_field_library(ws, "steel"), overlay), overlay)
++    groups = [s.get("group") for s in steps if s["type"] == "property"]
++    assert groups == ["mechanical_properties"]
+===== configs/templates/steel.json =====
+--- /dev/null	2026-07-31 14:41:21.307720081 +0000
++++ /internfs/wangchenyan/shougang/steel_extract_tool_workspace/configs/templates/steel.json	2026-08-27 14:44:19.559243247 +0000
+@@ -0,0 +1,17 @@
++{
++  "id": "steel",
++  "name": "钢铁样品-状态",
++  "domain_hint": "金属材料文献",
++  "layers": [
++    {"id": "metadata", "name": "文章信息", "cardinality": "one", "json_key": "paper_metadata"},
++    {"id": "sample", "name": "样品信息", "cardinality": "many", "json_key": "samples", "id_field": "sample_id"},
++    {"id": "condition", "name": "状态信息", "cardinality": "many", "json_key": "conditions", "id_field": "condition_id", "parent_layer": "sample", "parent_id_field": "sample_id"},
++    {"id": "property", "name": "性能", "attach_to": "condition"},
++    {"id": "figure", "name": "图片信息", "cardinality": "many", "json_key": "figures", "ref_fields": ["sample_id", "condition_id"]}
++  ],
++  "property_groups": [
++    {"id": "mechanical_properties", "name": "力学性能"},
++    {"id": "magnetic_properties", "name": "磁性能"}
++  ],
++  "identity_fields": ["sample_id", "condition_id"]
++}
+===== configs/templates/blank.json =====
+--- /dev/null	2026-07-31 14:41:21.307720081 +0000
++++ /internfs/wangchenyan/shougang/steel_extract_tool_workspace/configs/templates/blank.json	2026-08-27 14:44:51.288059628 +0000
+@@ -0,0 +1,14 @@
++{
++  "id": "blank",
++  "name": "空模板",
++  "domain_hint": "",
++  "layers": [
++    {"id": "metadata", "name": "文章信息", "cardinality": "one", "json_key": "paper_metadata"},
++    {"id": "sample", "name": "样品信息", "cardinality": "many", "json_key": "samples", "id_field": "sample_id"},
++    {"id": "condition", "name": "状态信息", "cardinality": "many", "json_key": "conditions", "id_field": "condition_id", "parent_layer": "sample", "parent_id_field": "sample_id"},
++    {"id": "property", "name": "性能", "attach_to": "condition"},
++    {"id": "figure", "name": "图片信息", "cardinality": "many", "json_key": "figures", "ref_fields": ["sample_id", "condition_id"]}
++  ],
++  "property_groups": [],
++  "identity_fields": ["sample_id", "condition_id"]
++}
+===== configs/projects/demo_steel.json =====
+--- /dev/null	2026-07-31 14:41:21.307720081 +0000
++++ /internfs/wangchenyan/shougang/steel_extract_tool_workspace/configs/projects/demo_steel.json	2026-08-27 14:45:16.437709200 +0000
+@@ -0,0 +1,43 @@
++{
++  "template_id": "steel",
++  "selected_field_ids": [
++    "title",
++    "material_system",
++    "sample_id",
++    "sample_name",
++    "product_form",
++    "alloy_family",
++    "composition",
++    "base_processing_description",
++    "condition_id",
++    "condition_name",
++    "condition_type",
++    "heat_treatment_condition",
++    "test_temperature",
++    "condition_processing_description",
++    "yield_strength",
++    "tensile_strength",
++    "elongation",
++    "permeability",
++    "figure_id",
++    "placeholder_index",
++    "figure_type",
++    "is_microstructure_image",
++    "is_post_test_image",
++    "scale_bar_info"
++  ],
++  "private_fields": [],
++  "field_overrides": {},
++  "step_overrides": null,
++  "property_source": {
++    "allow": ["measured_table", "measured_text", "example_table"],
++    "deny": ["abstract_target", "claim_range", "generalized_threshold", "figure_ocr", "curve_estimate"],
++    "deny_phrase_patterns": ["above", "below", "target", "at least", "no less than", "以上", "以下", "不低于", "目标", "优选"]
++  },
++  "figure_filter": {
++    "keep_types": ["OM", "SEM", "TEM", "EBSD"],
++    "drop_types": ["XRD", "SAED", "EDS", "EDX", "EPMA", "stress_strain_curve", "hysteresis_loop", "schematic", "other"],
++    "drop_if_post_test": true,
++    "require_microstructure": true
++  }
++}
+===== configs/project_config.json =====
+--- /dev/null	2026-07-31 14:41:21.307720081 +0000
++++ /internfs/wangchenyan/shougang/steel_extract_tool_workspace/configs/project_config.json	2026-08-27 14:45:20.898434123 +0000
+@@ -0,0 +1,65 @@
++{
++  "workspace_mode": "sandbox",
++  "remote_source_root": "/internfs/wangchenyan/shougang/Extract_data",
++  "write_policy": {
++    "remote_extract_data": "read_only",
++    "test_outputs": "test_runs/<project_id>/<test|data>/<run_id>"
++  },
++  "default_project": "demo_steel",
++  "models": [
++    {"id": "mock", "label": "离线示例 mock（无需 key）", "backend": "mock", "base_url": "(离线，无需网络)", "model": "mock-two-stage"},
++    {"id": "claude-4.5-sonnet", "label": "Claude 4.5 Sonnet（多模态）", "backend": "claude", "base_url": "https://api.gpugeek.com/v1/messages", "model": "Vendor2/Claude-4.5-Sonnet"},
++    {"id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash（多模态）", "backend": "claude", "base_url": "https://api.gpugeek.com/v1/messages", "model": "Vendor/Gemini-2.5-Flash"},
++    {"id": "qwen-vl-max", "label": "Qwen-VL-Max（多模态）", "backend": "claude", "base_url": "https://api.gpugeek.com/v1/messages", "model": "Vendor/Qwen-VL-Max"}
++  ],
++  "projects": {
++    "demo_steel": {
++      "name": "示例：不锈钢文献（离线可跑）",
++      "description": "内置样例项目：无需 API key / 网络，用 mock 后端端到端演示两阶段抽取与规则校验。复制这份配置改字段即可用于自己的领域。",
++      "runnable": true,
++      "backend": "mock",
++      "parsed_results": "example_data/example_demo/parsed_results",
++      "field_config": "configs/fields/demo_steel.json",
++      "template_id": "steel",
++      "overlay": "configs/projects/demo_steel.json",
++      "test_runs": "test_runs/demo_steel",
++      "stages": ["entity_skeleton", "property_binding", "figure_classification", "rule_validation", "merge_export"]
++    },
++    "non_magnetic": {
++      "name": "无磁钢",
++      "runnable": false,
++      "backend": "claude",
++      "field_config": "configs/fields/non_magnetic.json",
++      "script_snapshot": "script_snapshots/non_magnetic/scripts",
++      "test_runs": "test_runs/non_magnetic",
++      "stages": ["entity_skeleton", "property_binding", "figure_classification", "rule_validation", "merge_export"]
++    },
++    "nuclear_fusion": {
++      "name": "核聚变低磁奥氏体钢",
++      "runnable": false,
++      "backend": "claude",
++      "field_config": "configs/fields/nuclear_fusion.json",
++      "script_snapshot": "script_snapshots/nuclear_fusion/scripts",
++      "test_runs": "test_runs/nuclear_fusion",
++      "stages": ["entity_skeleton", "property_binding", "figure_classification", "rule_validation", "merge_export"]
++    },
++    "cor_res": {
++      "name": "耐蚀钢",
++      "runnable": false,
++      "backend": "claude",
++      "field_config": "configs/fields/cor_res.json",
++      "script_snapshot": "script_snapshots/cor_res/scripts",
++      "test_runs": "test_runs/cor_res",
++      "stages": ["entity_skeleton", "property_binding", "figure_classification", "rule_validation", "merge_export"]
++    },
++    "cuti": {
++      "name": "钛铜",
++      "runnable": false,
++      "backend": "claude",
++      "field_config": "configs/fields/cuti.json",
++      "script_snapshot": "script_snapshots/cuti/scripts",
++      "test_runs": "test_runs/cuti",
++      "stages": ["entity_skeleton", "property_binding", "figure_classification", "rule_validation", "merge_export"]
++    }
++  }
++}
+===== configs/field_library/steel.json (stat + first 80 lines) =====
+268 /internfs/wangchenyan/shougang/steel_extract_tool_workspace/configs/field_library/steel.json
+n_fields 24
+ids ['title', 'material_system', 'sample_id', 'sample_name', 'product_form', 'alloy_family', 'composition', 'base_processing_description', 'condition_id', 'condition_name', 'condition_type', 'heat_treatment_condition', 'test_temperature', 'condition_processing_description', 'yield_strength', 'tensile_strength', 'elongation', 'permeability', 'figure_id', 'placeholder_index', 'figure_type', 'is_microstructure_image', 'is_post_test_image', 'scale_bar_info']
+categories ['condition', 'figure', 'metadata', 'property', 'sample']
+groups ['magnetic_properties', 'mechanical_properties']

@@ -1,0 +1,79 @@
+{
+  "template_id": "steel",
+  "selected_field_ids": [
+    "title",
+    "material_system",
+    "sample_id",
+    "sample_name",
+    "product_form",
+    "alloy_family",
+    "composition",
+    "base_processing_description",
+    "condition_id",
+    "condition_name",
+    "condition_type",
+    "heat_treatment_condition",
+    "test_temperature",
+    "condition_processing_description",
+    "yield_strength",
+    "elongation",
+    "permeability",
+    "figure_id",
+    "placeholder_index",
+    "figure_type",
+    "is_microstructure_image",
+    "is_post_test_image",
+    "scale_bar_info",
+    "tensile_strength"
+  ],
+  "private_fields": [],
+  "field_overrides": {},
+  "step_overrides": null,
+  "property_source": {
+    "allow": [
+      "measured_table",
+      "measured_text",
+      "example_table"
+    ],
+    "deny": [
+      "abstract_target",
+      "claim_range",
+      "generalized_threshold",
+      "figure_ocr",
+      "curve_estimate"
+    ],
+    "deny_phrase_patterns": [
+      "above",
+      "below",
+      "target",
+      "at least",
+      "no less than",
+      "以上",
+      "以下",
+      "不低于",
+      "目标",
+      "优选"
+    ]
+  },
+  "figure_filter": {
+    "keep_types": [
+      "OM",
+      "SEM",
+      "TEM",
+      "EBSD"
+    ],
+    "drop_types": [
+      "XRD",
+      "SAED",
+      "EDS",
+      "EDX",
+      "EPMA",
+      "stress_strain_curve",
+      "hysteresis_loop",
+      "schematic",
+      "other"
+    ],
+    "drop_if_post_test": true,
+    "require_microstructure": true
+  }
+}

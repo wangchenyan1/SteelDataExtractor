@@ -1,0 +1,17 @@
+{
+  "id": "steel",
+  "name": "钢铁样品-状态",
+  "domain_hint": "金属材料文献",
+  "layers": [
+    {"id": "metadata", "name": "文章信息", "cardinality": "one", "json_key": "paper_metadata"},
+    {"id": "sample", "name": "样品信息", "cardinality": "many", "json_key": "samples", "id_field": "sample_id"},
+    {"id": "condition", "name": "状态信息", "cardinality": "many", "json_key": "conditions", "id_field": "condition_id", "parent_layer": "sample", "parent_id_field": "sample_id"},
+    {"id": "property", "name": "性能", "attach_to": "condition"},
+    {"id": "figure", "name": "图片信息", "cardinality": "many", "json_key": "figures", "ref_fields": ["sample_id", "condition_id"]}
+  ],
+  "property_groups": [
+    {"id": "mechanical_properties", "name": "力学性能"},
+    {"id": "magnetic_properties", "name": "磁性能"}
+  ],
+  "identity_fields": ["sample_id", "condition_id"]
+}

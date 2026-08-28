@@ -1,0 +1,268 @@
+{
+  "fields": [
+    {
+      "id": "title",
+      "label": "文献名称",
+      "category": "metadata",
+      "group": null,
+      "value_type": "string",
+      "rule": "抽取论文/专利标题原文，不要翻译、不要缩写。",
+      "positive_examples": "Effect of Annealing Temperature on a High-Nitrogen Austenitic Stainless Steel",
+      "negative_examples": "不要把期刊名、栏目名当成标题",
+      "note": "属于文章级元信息，全篇只出现一次。"
+    },
+    {
+      "id": "material_system",
+      "label": "材料体系",
+      "category": "metadata",
+      "group": null,
+      "value_type": "string",
+      "rule": "用简短短语概括材料体系/钢种大类。",
+      "positive_examples": "Cr-Mn-N high-nitrogen austenitic stainless steel",
+      "negative_examples": "不要堆砌成分数值，只给体系归类",
+      "note": ""
+    },
+    {
+      "id": "sample_id",
+      "label": "样品编号",
+      "category": "sample",
+      "group": null,
+      "value_type": "string",
+      "rule": "样品的内部编号，S1/S2 顺序编号，供其它字段引用。",
+      "positive_examples": "S1, S2",
+      "negative_examples": "不要用论文原始名当 id（原始名放 sample_name）",
+      "note": "id 是关系锚点，figure / condition 都靠它挂到样品上。"
+    },
+    {
+      "id": "sample_name",
+      "label": "样品名称",
+      "category": "sample",
+      "group": null,
+      "value_type": "string",
+      "rule": "sample = 化学成分独特或初始工艺独特的材料实体；保留论文原文命名。",
+      "positive_examples": "Steel A (Cr-Mn-N); Steel B (Cr-Ni ref.)",
+      "negative_examples": "不要把同一钢种的不同退火温度拆成不同 sample",
+      "note": "样品是后续所有字段的骨架，Stage1 只判断材料实体与状态边界。"
+    },
+    {
+      "id": "product_form",
+      "label": "产品形态",
+      "category": "sample",
+      "group": null,
+      "value_type": "enum",
+      "rule": "从枚举中选择产品形态，禁止自创类别；无法确定填 other。",
+      "positive_examples": "plate / sheet / bar / wire / pipe / forging / casting",
+      "negative_examples": "不要把参考文献里的样品形态套到本文样品",
+      "note": ""
+    },
+    {
+      "id": "alloy_family",
+      "label": "合金大类",
+      "category": "sample",
+      "group": null,
+      "value_type": "string",
+      "rule": "填该样品所属合金大类/成分体系简称。",
+      "positive_examples": "Cr-Mn-N; Cr-Ni",
+      "negative_examples": "不要写完整成分式",
+      "note": ""
+    },
+    {
+      "id": "composition",
+      "label": "成分",
+      "category": "sample",
+      "group": null,
+      "value_type": "composition",
+      "rule": "只填成分表/正文中明确给出的元素和数值，不要补全未知元素。",
+      "positive_examples": "C 0.05 / Cr 18.2 / Mn 10.5 / N 0.52",
+      "negative_examples": "严禁默认添加 Fe=bal.（除非原文明确写 balance Fe）",
+      "note": "成分错了会直接污染下游预测模型。"
+    },
+    {
+      "id": "base_processing_description",
+      "label": "基础工艺描述",
+      "category": "sample",
+      "group": null,
+      "value_type": "string",
+      "rule": "样品级公共工艺（冶炼/锻造/成材等所有 condition 共享部分）。",
+      "positive_examples": "vacuum induction melting, hot forging, hot rolling into 12 mm plate",
+      "negative_examples": "不要把某个 condition 独有的退火温度写进来",
+      "note": "与 condition_processing_description 区分：这里只放公共部分。"
+    },
+    {
+      "id": "condition_id",
+      "label": "状态编号",
+      "category": "condition",
+      "group": null,
+      "value_type": "string",
+      "rule": "状态编号 C1/C2...，Stage2 补性能时按此 id 绑定。",
+      "positive_examples": "C1, C2, C3, C4",
+      "negative_examples": "Stage2 禁止新增未在 Stage1 出现的 condition_id",
+      "note": "condition 索引是两阶段之间的契约。"
+    },
+    {
+      "id": "condition_name",
+      "label": "状态名称",
+      "category": "condition",
+      "group": null,
+      "value_type": "string",
+      "rule": "同一样品不同退火温度/热处理态属于 condition，不是新 sample。用极简代号。",
+      "positive_examples": "A-700 / A-720 / A-740",
+      "negative_examples": "不要把完整工艺描述堆进 condition_name",
+      "note": "700/720/740°C 退火 = 1 个 sample + 3 个 conditions。"
+    },
+    {
+      "id": "condition_type",
+      "label": "状态类型",
+      "category": "condition",
+      "group": null,
+      "value_type": "enum",
+      "rule": "从枚举区分状态类型。",
+      "positive_examples": "processing_condition / mechanical_test_condition / post_test_condition",
+      "negative_examples": "断后样品应标 post_test_condition，不要混入 processing",
+      "note": ""
+    },
+    {
+      "id": "heat_treatment_condition",
+      "label": "热处理条件",
+      "category": "condition",
+      "group": null,
+      "value_type": "string",
+      "rule": "该状态对应的热处理，可保留原文温度和时间。",
+      "positive_examples": "solution annealed 720C 30min, water quenched",
+      "negative_examples": "不要把测试温度误填成热处理温度",
+      "note": ""
+    },
+    {
+      "id": "test_temperature",
+      "label": "测试温度",
+      "category": "condition",
+      "group": null,
+      "value_type": "number_with_unit",
+      "rule": "只填性能测试温度；室温写 {value:RT, unit:''}。",
+      "positive_examples": "{value:'RT',unit:''}; {value:'77',unit:'K'}",
+      "negative_examples": "不要把热处理温度当测试温度",
+      "note": ""
+    },
+    {
+      "id": "condition_processing_description",
+      "label": "状态工艺描述",
+      "category": "condition",
+      "group": null,
+      "value_type": "string",
+      "rule": "该状态独有的补充工艺/测试细节，必须随 condition 变化。",
+      "positive_examples": "solution annealed at 720 C for 30 min",
+      "negative_examples": "不要让所有 condition 共享同一段笼统工艺",
+      "note": "公共工艺放 sample.base_processing_description。"
+    },
+    {
+      "id": "yield_strength",
+      "label": "屈服强度",
+      "category": "property",
+      "group": "mechanical_properties",
+      "value_type": "number_with_unit",
+      "rule": "只抽实测性能值，必须来自正文实测或性能表单元格。",
+      "positive_examples": "Table 2 中 A-700 的 685 MPa",
+      "negative_examples": "禁止把摘要/目标/权利要求里的『above 600 MPa』当成实测值",
+      "note": "性能值必须挂到已有 condition 上，不得新造 sample/condition。"
+    },
+    {
+      "id": "tensile_strength",
+      "label": "抗拉强度",
+      "category": "property",
+      "group": "mechanical_properties",
+      "value_type": "number_with_unit",
+      "rule": "抗拉强度 UTS/Rm，实测值，带单位 MPa。",
+      "positive_examples": "1020 MPa (A-700)",
+      "negative_examples": "不要抽曲线图坐标轴上的估读值",
+      "note": ""
+    },
+    {
+      "id": "elongation",
+      "label": "伸长率",
+      "category": "property",
+      "group": "mechanical_properties",
+      "value_type": "number_with_unit",
+      "rule": "断后伸长率/总伸长率，单位 %。",
+      "positive_examples": "42% (A-700)",
+      "negative_examples": "不要把均匀伸长率与断后伸长率混填",
+      "note": ""
+    },
+    {
+      "id": "permeability",
+      "label": "磁导率",
+      "category": "property",
+      "group": "magnetic_properties",
+      "value_type": "number_with_unit",
+      "rule": "相对磁导率 μr，实测值；无磁钢通常接近 1。属于磁性能，单独一步抽取。",
+      "positive_examples": "1.01 (relative)",
+      "negative_examples": "不要与力学性能混在一次调用里抽",
+      "note": "这是一个独立的抽取步骤（Stage2b），和力学性能分开调用。"
+    },
+    {
+      "id": "figure_id",
+      "label": "图号",
+      "category": "figure",
+      "group": null,
+      "value_type": "string",
+      "rule": "图号原文，如 Figure 1 / Fig. 2a。",
+      "positive_examples": "Figure 1, Figure 2",
+      "negative_examples": "",
+      "note": ""
+    },
+    {
+      "id": "placeholder_index",
+      "label": "占位索引",
+      "category": "figure",
+      "group": null,
+      "value_type": "string",
+      "rule": "必须与正文中的 [FIGURE_PLACEHOLDER_n] 编号一致。",
+      "positive_examples": "1, 2, 3",
+      "negative_examples": "编号错位会导致图片和文本对不上",
+      "note": ""
+    },
+    {
+      "id": "figure_type",
+      "label": "图片类型",
+      "category": "figure",
+      "group": null,
+      "value_type": "enum",
+      "rule": "按图像内容判定类型；只有组织类会入库。",
+      "positive_examples": "OM / SEM / TEM / EBSD",
+      "negative_examples": "XRD / SAED / stress_strain_curve / schematic 属于非组织图",
+      "note": "图片过滤按 figure_filter 白名单执行。"
+    },
+    {
+      "id": "is_microstructure_image",
+      "label": "是否组织形貌图",
+      "category": "figure",
+      "group": null,
+      "value_type": "boolean",
+      "rule": "是否为组织形貌图（before-test）。",
+      "positive_examples": "OM/SEM/TEM/EBSD 组织形貌 = true",
+      "negative_examples": "XRD/衍射/曲线/示意图 = false",
+      "note": "与 is_post_test_image 是两个独立维度。"
+    },
+    {
+      "id": "is_post_test_image",
+      "label": "是否断后图",
+      "category": "figure",
+      "group": null,
+      "value_type": "boolean",
+      "rule": "是否为断后/拉伸后/断口图。",
+      "positive_examples": "fracture surface / post-test SEM = true",
+      "negative_examples": "退火态组织图 = false",
+      "note": "断后图默认不入组织图库。"
+    },
+    {
+      "id": "scale_bar_info",
+      "label": "比例尺信息",
+      "category": "figure",
+      "group": null,
+      "value_type": "number_with_unit",
+      "rule": "组织/形貌图必须尝试提取比例尺；无则 null。",
+      "positive_examples": "{value:'25',unit:'μm'}",
+      "negative_examples": "曲线图/示意图无比例尺，填 null",
+      "note": ""
+    }
+  ]
+}

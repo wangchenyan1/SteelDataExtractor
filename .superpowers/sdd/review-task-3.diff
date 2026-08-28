@@ -1,0 +1,368 @@
+# Review package Task 3
+## Diff
+===== tools/provenance.py =====
+--- /dev/null	2026-07-31 14:41:21.307720081 +0000
++++ /internfs/wangchenyan/shougang/steel_extract_tool_workspace/tools/provenance.py	2026-08-27 14:50:55.305883537 +0000
+@@ -0,0 +1,82 @@
++"""Provenance value shapes and excerpt span matching."""
++
++from __future__ import annotations
++
++import re
++from typing import Any
++
++
++def is_identity_field(template: dict, field: dict) -> bool:
++    """True if field id is identity or equals any layer parent_id_field / ref_fields."""
++    fid = field.get("id")
++    if not fid:
++        return False
++    if fid in set(template.get("identity_fields") or []):
++        return True
++    for layer in template.get("layers") or []:
++        if layer.get("parent_id_field") == fid:
++            return True
++        if fid in (layer.get("ref_fields") or []):
++            return True
++    return False
++
++
++def value_shape(field: dict) -> dict:
++    """Return provenance-wrapped empty value shape for a non-identity field."""
++    value_type = field.get("value_type")
++    if value_type == "composition":
++        value: Any = {}
++    elif value_type == "boolean":
++        value = None
++    else:
++        value = ""
++    shape: dict[str, Any] = {
++        "value": value,
++        "unit": "",
++        "excerpt": "",
++        "location": "",
++    }
++    if field.get("category") == "property":
++        shape["source"] = ""
++    return shape
++
++
++def _normalize_ws(s: str) -> str:
++    return re.sub(r"\s+", " ", s).strip()
++
++
++def find_excerpt_span(text: str, excerpt: str) -> tuple[int, int] | None:
++    """Whitespace-normalized substring match; return original text [start, end)."""
++    norm_excerpt = _normalize_ws(excerpt)
++    if not norm_excerpt:
++        return None
++
++    # Build normalized string and map each norm index → original index.
++    norm_chars: list[str] = []
++    norm_to_orig: list[int] = []
++    i = 0
++    while i < len(text) and text[i].isspace():
++        i += 1
++    while i < len(text):
++        if text[i].isspace():
++            j = i
++            while j < len(text) and text[j].isspace():
++                j += 1
++            if j >= len(text):
++                break  # trailing whitespace omitted from normalized form
++            norm_chars.append(" ")
++            norm_to_orig.append(i)
++            i = j
++        else:
++            norm_chars.append(text[i])
++            norm_to_orig.append(i)
++            i += 1
++
++    norm_text = "".join(norm_chars)
++    pos = norm_text.find(norm_excerpt)
++    if pos < 0:
++        return None
++
++    start = norm_to_orig[pos]
++    last = norm_to_orig[pos + len(norm_excerpt) - 1]
++    return start, last + 1
+===== tests/test_provenance.py =====
+--- /dev/null	2026-07-31 14:41:21.307720081 +0000
++++ /internfs/wangchenyan/shougang/steel_extract_tool_workspace/tests/test_provenance.py	2026-08-27 14:49:49.536554062 +0000
+@@ -0,0 +1,29 @@
++from tools.provenance import find_excerpt_span, value_shape, is_identity_field
++from tools.config_model import load_template
++from pathlib import Path
++
++ROOT = Path("/internfs/wangchenyan/shougang/steel_extract_tool_workspace")
++
++
++def test_find_excerpt_ignores_whitespace():
++    text = "The yield strength of A-700 is 685 MPa"
++    span = find_excerpt_span(text, "yield strength of A-700 is 685 MPa")
++    assert span is not None
++    start, end = span
++    assert "685 MPa" in text[start:end]
++
++
++def test_find_excerpt_missing():
++    assert find_excerpt_span("hello", "not here") is None
++
++
++def test_identity_not_wrapped():
++    tmpl = load_template(ROOT, "steel")
++    assert is_identity_field(tmpl, {"id": "sample_id", "category": "sample"})
++    assert is_identity_field(tmpl, {"id": "sample_id", "category": "condition"})
++    assert not is_identity_field(tmpl, {"id": "title", "category": "metadata"})
++
++
++def test_property_shape_has_source():
++    shape = value_shape({"id": "yield_strength", "category": "property", "value_type": "number_with_unit"})
++    assert set(shape) >= {"value", "unit", "excerpt", "location", "source"}
+===== tests/test_export.py =====
+--- /dev/null	2026-07-31 14:41:21.307720081 +0000
++++ /internfs/wangchenyan/shougang/steel_extract_tool_workspace/tests/test_export.py	2026-08-27 14:49:49.536419976 +0000
+@@ -0,0 +1,21 @@
++from tools.config_model import export_project
++from pathlib import Path
++
++ROOT = Path("/internfs/wangchenyan/shougang/steel_extract_tool_workspace")
++
++
++def test_export_demo_contains_fields_steps_schema():
++    data = export_project(ROOT, "demo_steel")
++    assert data["project_id"] == "demo_steel"
++    assert data["template_id"] == "steel"
++    ids = [f["id"] for f in data["fields"]]
++    assert "yield_strength" in ids
++    assert any(s["type"] == "entity" for s in data["steps"])
++    schema = data["schema"]
++    assert "paper_metadata" in schema
++    assert "samples" in schema
++    assert "conditions" in schema
++    assert "excerpt" in schema["paper_metadata"]["title"]
++    assert schema["samples"][0]["sample_id"] == ""
++    assert "mechanical_properties" in schema["conditions"][0]
++    assert "excerpt" in schema["conditions"][0]["mechanical_properties"]["yield_strength"]
+===== config_model.py functions (build_output_schema, export_project, related) =====
+def identity_field_ids(template: dict) -> set[str]:
+    return set(template.get("identity_fields") or [])
+
+
+def generate_steps(template: dict, fields: list[dict], overlay: dict) -> list[dict]:
+    overrides = overlay.get("step_overrides")
+    if overrides:
+        steps = list(overrides)
+        entity_idx = next((i for i, s in enumerate(steps) if s.get("type") == "entity"), None)
+        if entity_idx is None:
+            raise ValueError("骨架步必须先于性能和图片")
+        for i, s in enumerate(steps):
+            if s.get("type") in ("property", "figure") and i < entity_idx:
+                raise ValueError("骨架步必须先于性能和图片")
+        return steps
+
+    steps: list[dict] = [{"id": "entity", "type": "entity", "name": "骨架"}]
+
+    group_fields: dict[str, list[str]] = {}
+    for f in fields:
+        g = f.get("group")
+        if g:
+            group_fields.setdefault(g, []).append(f["id"])
+
+    group_names = {g["id"]: g.get("name", g["id"]) for g in template.get("property_groups") or []}
+    for ginfo in template.get("property_groups") or []:
+        gid = ginfo["id"]
+        if gid not in group_fields:
+            continue
+        step_id = gid.removesuffix("_properties")
+        steps.append(
+            {
+                "id": step_id,
+                "type": "property",
+                "name": group_names.get(gid, gid),
+                "group": gid,
+                "fields": group_fields[gid],
+            }
+        )
+
+    if any(f.get("category") == "figure" for f in fields):
+        steps.append({"id": "figures", "type": "figure", "name": "图片过滤"})
+
+    return steps
+
+
+def save_overlay(root: Path, project_id: str, overlay: dict) -> None:
+    path = root / "configs" / "projects" / f"{project_id}.json"
+    _write_json(path, overlay)
+
+
+def writeback_library_field(root: Path, template_id: str, field: dict) -> None:
+    path = root / "configs" / "field_library" / f"{template_id}.json"
+    lib = _read_json(path)
+    fields = lib.setdefault("fields", [])
+    fid = field["id"]
+    for i, existing in enumerate(fields):
+        if existing.get("id") == fid:
+            updated = {**existing, **field}
+            fields[i] = updated
+            break
+    else:
+        fields.append(field)
+    _write_json(path, lib)
+
+
+def promote_private_field(root: Path, project_id: str, field_id: str) -> dict:
+    overlay = load_overlay(root, project_id)
+    private = list(overlay.get("private_fields") or [])
+    match = None
+    remaining = []
+    for f in private:
+        if f.get("id") == field_id:
+            match = f
+        else:
+            remaining.append(f)
+    if match is None:
+        raise ValueError(f"private field not found: {field_id}")
+
+    template_id = overlay["template_id"]
+    lib_field = {k: match.get(k) for k in (
+        "id", "label", "category", "group", "value_type",
+        "rule", "positive_examples", "negative_examples", "note",
+    )}
+    writeback_library_field(root, template_id, lib_field)
+
+    selected = list(overlay.get("selected_field_ids") or [])
+    if field_id not in selected:
+        selected.append(field_id)
+    overlay["selected_field_ids"] = selected
+    overlay["private_fields"] = remaining
+    save_overlay(root, project_id, overlay)
+    return overlay
+
+
+def create_project(
+    root: Path,
+    project_id: str,
+    name: str,
+    template_id: str,
+    selected_field_ids: list[str],
+) -> dict:
+    overlay = {
+        "template_id": template_id,
+        "selected_field_ids": list(selected_field_ids),
+        "private_fields": [],
+        "field_overrides": {},
+        "step_overrides": None,
+        "property_source": {},
+        "figure_filter": {},
+    }
+    save_overlay(root, project_id, overlay)
+
+    cfg_path = root / "configs" / "project_config.json"
+    cfg = _read_json(cfg_path) if cfg_path.exists() else {"projects": {}}
+    projects = cfg.setdefault("projects", {})
+    projects[project_id] = {
+        "name": name,
+        "runnable": True,
+        "backend": "mock",
+        "template_id": template_id,
+        "overlay": f"configs/projects/{project_id}.json",
+        "field_config": f"configs/projects/{project_id}.json",
+        "parsed_results": f"parsed_results/{project_id}",
+        "test_runs": f"test_runs/{project_id}",
+    }
+    _write_json(cfg_path, cfg)
+    return overlay
+
+
+_CATEGORY_ORDER = ("metadata", "sample", "condition", "property", "figure")
+
+
+def _field_slot(template: dict, field: dict) -> Any:
+    if is_identity_field(template, field):
+        return ""
+    return value_shape(field)
+
+
+def build_output_schema(template: dict, fields: list[dict]) -> dict:
+    by_cat: dict[str, list[dict]] = {}
+    for f in fields:
+        by_cat.setdefault(f.get("category") or "", []).append(f)
+
+    layers_by_id = {layer["id"]: layer for layer in template.get("layers") or []}
+
+    paper_metadata: dict[str, Any] = {}
+    for f in by_cat.get("metadata", []):
+        paper_metadata[f["id"]] = _field_slot(template, f)
+
+    sample_obj: dict[str, Any] = {}
+    sample_layer = layers_by_id.get("sample") or {}
+    if sample_layer.get("id_field"):
+        sample_obj[sample_layer["id_field"]] = ""
+    for f in by_cat.get("sample", []):
+        sample_obj[f["id"]] = _field_slot(template, f)
+
+    condition_obj: dict[str, Any] = {}
+    condition_layer = layers_by_id.get("condition") or {}
+    if condition_layer.get("id_field"):
+        condition_obj[condition_layer["id_field"]] = ""
+    if condition_layer.get("parent_id_field"):
+        condition_obj[condition_layer["parent_id_field"]] = ""
+    for f in by_cat.get("condition", []):
+        condition_obj[f["id"]] = _field_slot(template, f)
+
+    for f in by_cat.get("property", []):
+        group = f.get("group")
+        if not group:
+            continue
+        bucket = condition_obj.setdefault(group, {})
+        bucket[f["id"]] = _field_slot(template, f)
+
+    figure_obj: dict[str, Any] = {}
+    figure_layer = layers_by_id.get("figure") or {}
+    for rf in figure_layer.get("ref_fields") or []:
+        figure_obj[rf] = ""
+    for f in by_cat.get("figure", []):
+        figure_obj[f["id"]] = _field_slot(template, f)
+
+    return {
+        "paper_metadata": paper_metadata,
+        "samples": [sample_obj],
+        "conditions": [condition_obj],
+        "figures": [figure_obj],
+    }
+
+
+def _sort_export_fields(template: dict, fields: list[dict]) -> list[dict]:
+    cat_rank = {c: i for i, c in enumerate(_CATEGORY_ORDER)}
+    group_rank = {
+        g["id"]: i for i, g in enumerate(template.get("property_groups") or [])
+    }
+
+    def key(f: dict) -> tuple:
+        cat = f.get("category") or ""
+        c = cat_rank.get(cat, 99)
+        g = group_rank.get(f.get("group") or "", 99) if cat == "property" else 0
+        return (c, g, f.get("id") or "")
+
+    return sorted(fields, key=key)
+
+
+def export_project(root: Path, project_id: str) -> dict:
+    overlay = load_overlay(root, project_id)
+    template_id = overlay["template_id"]
+    template = load_template(root, template_id)
+    library = load_field_library(root, template_id)
+    fields = effective_fields(library, overlay)
+    steps = generate_steps(template, fields, overlay)
+    schema = build_output_schema(template, fields)
+    return {
+        "project_id": project_id,
+        "template_id": template_id,
+        "exported_at": datetime.now().isoformat(timespec="seconds"),
+        "fields": _sort_export_fields(template, fields),
+        "steps": steps,
+        "schema": schema,
+    }
+
+FILE_LEN 292 lines
