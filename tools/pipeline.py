@@ -334,6 +334,17 @@ def classify_figures(figures: list, field_config: dict, apply_filter: bool) -> t
     return kept, warnings
 
 
+def _apply_figure_policy(state: dict, apply_rules: bool) -> None:
+    """无用户 figure 步时，对 entity.figures 做策略后处理并写入 state。"""
+    source = (state.get("entity") or {}).get("figures") or []
+    figures, fig_warnings = classify_figures(
+        source, state["field_config"], apply_filter=apply_rules)
+    state["figures"] = figures
+    state["warnings"] = [w for w in state["warnings"] if w.get("type") != "figure_dropped"]
+    if apply_rules:
+        state["warnings"].extend(fig_warnings)
+
+
 # ---------------------------------------------------------------------------
 # 合并
 # ---------------------------------------------------------------------------
@@ -490,10 +501,9 @@ def _write_run_outputs(state: dict) -> dict:
     steps = get_steps(state["field_config"])
     entity = state["entity"]
     property_groups = state["property_groups"]
-    figures = state["figures"]
     if not any(s.get("type") == "figure" for s in steps):
-        figures = entity.get("figures", [])
-        state["figures"] = figures
+        _apply_figure_policy(state, state["apply_rules"])
+    figures = state["figures"]
 
     result = merge_result(entity, property_groups, figures)
     result["_paper_id"] = state["paper_id"]
