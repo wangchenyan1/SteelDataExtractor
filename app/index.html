@@ -165,11 +165,56 @@
               <h3>字段配置</h3>
               <div class="field-config-actions">
                 <button id="addFieldBtn" class="ghost">新增字段</button>
+                <button id="btnSaveConfig" class="primary">保存配置</button>
               </div>
             </div>
             <div id="fieldLibraryPanel" class="field-library-panel">
-              <p class="mode-hint">从公共字段库勾选（写入项目覆盖层 selected_field_ids）</p>
+              <p class="mode-hint">从公共字段库按类别勾选要抽取的字段；已勾选字段旁可改规则。</p>
               <div id="fieldLibraryChecks" class="field-library-checks"></div>
+            </div>
+
+            <div class="config-section">
+              <div class="panel-title">
+                <h3>抽取阶段</h3>
+                <button id="btnAddStage" class="ghost" type="button">添加性能阶段</button>
+              </div>
+              <p class="mode-hint">骨架固定为第一步；性能字段须全部挂到某个性能阶段后才能保存。</p>
+              <div id="stageEditor" class="stage-editor"></div>
+            </div>
+
+            <div class="config-section strategy-section">
+              <h3>过滤策略</h3>
+              <div class="strategy-grid">
+                <article class="strategy-card">
+                  <h4>性能来源</h4>
+                  <p class="mode-hint">摘要目标值、宣传区间等不算可靠测量；命中后结果保留并标为未通过，附原因。</p>
+                  <label>允许来源（逗号分隔）
+                    <textarea id="strategyAllow" rows="2" placeholder="measured_table, measured_text"></textarea>
+                  </label>
+                  <label>禁止来源（逗号分隔）
+                    <textarea id="strategyDeny" rows="2" placeholder="abstract_target, claim_range"></textarea>
+                  </label>
+                  <label>禁止短语（逗号分隔）
+                    <textarea id="strategyDenyPhrases" rows="2" placeholder="以上, 目标, above"></textarea>
+                  </label>
+                </article>
+                <article class="strategy-card">
+                  <h4>图片策略</h4>
+                  <p class="mode-hint">如只关注组织形貌；XRD/曲线等标为未通过，仍出现在结果树中便于复核。</p>
+                  <label>保留类型 keep_types（逗号分隔）
+                    <textarea id="strategyKeepTypes" rows="2" placeholder="OM, SEM, TEM, EBSD"></textarea>
+                  </label>
+                  <label>丢弃类型 drop_types（逗号分隔）
+                    <textarea id="strategyDropTypes" rows="2" placeholder="XRD, schematic, other"></textarea>
+                  </label>
+                  <label class="check-item">
+                    <input type="checkbox" id="strategyRequireMicro" /> 要求组织图（is_microstructure_image）
+                  </label>
+                  <label class="check-item">
+                    <input type="checkbox" id="strategyDropPostTest" /> 丢弃断后/post-test 图
+                  </label>
+                </article>
+              </div>
             </div>
         </section>
 

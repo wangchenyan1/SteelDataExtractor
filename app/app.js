@@ -76,6 +76,7 @@
     currentResult: null,
     editingRule: null,
     view: "papers",
+    stageDraft: [],
   };
 
   const FIELD_LEVELS = [
@@ -106,6 +107,7 @@
     document.querySelectorAll("#viewNav [data-view]").forEach((btn) => {
       btn.classList.toggle("active", btn.getAttribute("data-view") === name);
     });
+    if (name === "config") loadConfigEditor();
   }
 
   // ---------------------------------------------------------------- init
@@ -222,6 +224,7 @@
     renderPapers();
     renderSnapshotTable();
     buildPromptPreview();
+    loadConfigEditor();
     updateRunButtons();
     clearRunOutputs();
     await restoreEntityDoneFromLatestRun();
@@ -401,6 +404,7 @@
 
   function renderFieldLibraryChecks() {
     const box = $("fieldLibraryChecks");
+    if (!box) return;
     const fields = (state.fieldLibrary && state.fieldLibrary.fields) || [];
     if (!fields.length) {
       box.innerHTML =
@@ -432,6 +436,18 @@
         cb.addEventListener("change", () => onLibraryCheckChange(f.id, cb.checked));
         lab.appendChild(cb);
         lab.appendChild(document.createTextNode(` ${f.label || f.id}`));
+        if (selected.has(f.id)) {
+          const ruleBtn = document.createElement("button");
+          ruleBtn.type = "button";
+          ruleBtn.className = "ghost rule-mini";
+          ruleBtn.textContent = "规则";
+          ruleBtn.addEventListener("click", (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            openRuleDialog(f.category || cat, f.id);
+          });
+          lab.appendChild(ruleBtn);
+        }
         wrap.appendChild(lab);
       });
       group.appendChild(wrap);
@@ -449,6 +465,38 @@
     if (checked) ids.add(fieldId);
     else ids.delete(fieldId);
     state.overlay.selected_field_ids = Array.from(ids);
+
+    const libFields = (state.fieldLibrary && state.fieldLibrary.fields) || [];
+    const meta = libFields.find((f) => f.id === fieldId);
+    const isProperty = meta && meta.category === "property";
+
+    if (!checked) {
+      syncStageDraftFromDom();
+      state.stageDraft.forEach((s) => {
+        s.fields = (s.fields || []).filter((id) => id !== fieldId);
+      });
+      if (Array.isArray(state.overlay.steps) && state.overlay.steps.length) {
+        state.overlay.steps = state.overlay.steps
+          .map((s) => {
+            if (s.type !== "property") return s;
+            return {
+              ...s,
+              fields: (s.fields || []).filter((id) => id !== fieldId),
+            };
+          })
+          .filter((s) => s.type !== "property" || (s.fields || []).length);
+      }
+    }
+
+    // 新勾选的性能字段尚未挂阶段：只更新本地，等「保存配置」一并落盘
+    if (checked && isProperty && state.overlay.steps && state.overlay.steps.length) {
+      renderFieldLibraryChecks();
+      renderStageEditor();
+      $("runStatus").textContent =
+        "已勾选性能字段，请挂到阶段后点击「保存配置」。";
+      return;
+    }
+
     try {
       await saveOverlay(state.overlay);
       logChange(`${checked ? "勾选" : "取消"}字段 ${fieldId}`);
@@ -476,6 +524,306 @@
     renderReextractFields();
     renderSchema();
     buildPromptPreview();
+    loadConfigEditor();
+  }
+
+  // ---------------------------------------------------------------- config view: stages + strategy
+  function splitCsv(text) {
+    return String(text || "")
+      .split(/[,，\n]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
+  function joinCsv(arr) {
+    return (arr || []).join(", ");
+  }
+
+  function propertyIdsSelected() {
+    const selected = selectedFieldIds();
+    const fields = (state.fieldLibrary && state.fieldLibrary.fields) || [];
+    if (fields.length) {
+      return fields
+        .filter((f) => f.category === "property" && selected.has(f.id))
+        .map((f) => f.id);
+    }
+    const fromProject = ((state.project && state.project.fields) || {}).property || [];
+    return fromProject.filter((id) => selected.has(id));
+  }
+
+  function fieldLabel(id) {
+    const fields = (state.fieldLibrary && state.fieldLibrary.fields) || [];
+    const f = fields.find((x) => x.id === id);
+    return (f && f.label) || id;
+  }
+
+  function fieldGroup(id) {
+    const fields = (state.fieldLibrary && state.fieldLibrary.fields) || [];
+    const f = fields.find((x) => x.id === id);
+    return (f && f.group) || null;
+  }
+
+  function inferGroup(fields, fallbackId) {
+    const groups = fields.map(fieldGroup).filter(Boolean);
+    if (groups.length && groups.every((g) => g === groups[0])) return groups[0];
+    return (fallbackId || "custom") + "_properties";
+  }
+
+  function loadStageDraftFromOverlay() {
+    const src =
+      (state.overlay && state.overlay.steps) ||
+      (state.project && state.project.steps) ||
+      [];
+    state.stageDraft = src
+      .filter((s) => s && s.type === "property")
+      .map((s) => ({
+        id: s.id,
+        name: s.name || s.id,
+        group: s.group || inferGroup(s.fields || [], s.id),
+        fields: Array.isArray(s.fields) ? s.fields.slice() : [],
+      }));
+  }
+
+  function fillStrategyForms() {
+    const src =
+      (state.overlay && state.overlay.property_source) ||
+      (state.project && state.project.property_source) ||
+      {};
+    const ff =
+      (state.overlay && state.overlay.figure_filter) ||
+      (state.project && state.project.figure_filter) ||
+      {};
+    if ($("strategyAllow")) $("strategyAllow").value = joinCsv(src.allow);
+    if ($("strategyDeny")) $("strategyDeny").value = joinCsv(src.deny);
+    if ($("strategyDenyPhrases"))
+      $("strategyDenyPhrases").value = joinCsv(src.deny_phrase_patterns);
+    if ($("strategyKeepTypes")) $("strategyKeepTypes").value = joinCsv(ff.keep_types);
+    if ($("strategyDropTypes")) $("strategyDropTypes").value = joinCsv(ff.drop_types);
+    if ($("strategyRequireMicro"))
+      $("strategyRequireMicro").checked = !!ff.require_microstructure;
+    if ($("strategyDropPostTest"))
+      $("strategyDropPostTest").checked = !!ff.drop_if_post_test;
+  }
+
+  function readStrategyPropertySource() {
+    return {
+      allow: splitCsv($("strategyAllow") && $("strategyAllow").value),
+      deny: splitCsv($("strategyDeny") && $("strategyDeny").value),
+      deny_phrase_patterns: splitCsv(
+        $("strategyDenyPhrases") && $("strategyDenyPhrases").value
+      ),
+    };
+  }
+
+  function readStrategyFigureFilter() {
+    return {
+      keep_types: splitCsv($("strategyKeepTypes") && $("strategyKeepTypes").value),
+      drop_types: splitCsv($("strategyDropTypes") && $("strategyDropTypes").value),
+      require_microstructure: !!(
+        $("strategyRequireMicro") && $("strategyRequireMicro").checked
+      ),
+      drop_if_post_test: !!(
+        $("strategyDropPostTest") && $("strategyDropPostTest").checked
+      ),
+    };
+  }
+
+  function syncStageDraftFromDom() {
+    const box = $("stageEditor");
+    if (!box) return;
+    box.querySelectorAll(".stage-row[data-stage-id]").forEach((row) => {
+      const id = row.getAttribute("data-stage-id");
+      const draft = state.stageDraft.find((s) => s.id === id);
+      if (!draft) return;
+      const nameInput = row.querySelector(".stage-name");
+      if (nameInput) draft.name = nameInput.value.trim() || draft.id;
+      const checked = Array.from(row.querySelectorAll('input[type="checkbox"]:checked')).map(
+        (cb) => cb.value
+      );
+      draft.fields = checked;
+      draft.group = inferGroup(draft.fields, draft.id);
+    });
+  }
+
+  function renderStageEditor() {
+    const box = $("stageEditor");
+    if (!box) return;
+    const propIds = propertyIdsSelected();
+    const assigned = new Set();
+    state.stageDraft.forEach((s) => (s.fields || []).forEach((id) => assigned.add(id)));
+
+    box.innerHTML = "";
+    const entity = document.createElement("div");
+    entity.className = "stage-row entity-row";
+    entity.innerHTML =
+      '<div class="stage-row-head"><strong>骨架</strong>' +
+      '<span class="mode-hint">文章 / 样品 / 状态（固定第一阶段，不可删改）</span></div>';
+    box.appendChild(entity);
+
+    state.stageDraft.forEach((stage, idx) => {
+      const row = document.createElement("div");
+      row.className = "stage-row";
+      row.dataset.stageId = stage.id;
+
+      const head = document.createElement("div");
+      head.className = "stage-row-head";
+      const nameInput = document.createElement("input");
+      nameInput.className = "stage-name";
+      nameInput.type = "text";
+      nameInput.value = stage.name || stage.id;
+      nameInput.addEventListener("change", () => {
+        stage.name = nameInput.value.trim() || stage.id;
+      });
+      head.appendChild(nameInput);
+
+      const actions = document.createElement("div");
+      actions.className = "stage-row-actions";
+      const mkBtn = (label, fn, disabled) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "ghost";
+        b.textContent = label;
+        b.disabled = !!disabled;
+        b.addEventListener("click", fn);
+        return b;
+      };
+      actions.appendChild(
+        mkBtn("上移", () => {
+          syncStageDraftFromDom();
+          if (idx <= 0) return;
+          const t = state.stageDraft[idx - 1];
+          state.stageDraft[idx - 1] = state.stageDraft[idx];
+          state.stageDraft[idx] = t;
+          renderStageEditor();
+        }, idx === 0)
+      );
+      actions.appendChild(
+        mkBtn("下移", () => {
+          syncStageDraftFromDom();
+          if (idx >= state.stageDraft.length - 1) return;
+          const t = state.stageDraft[idx + 1];
+          state.stageDraft[idx + 1] = state.stageDraft[idx];
+          state.stageDraft[idx] = t;
+          renderStageEditor();
+        }, idx === state.stageDraft.length - 1)
+      );
+      actions.appendChild(
+        mkBtn("删除", () => {
+          syncStageDraftFromDom();
+          state.stageDraft.splice(idx, 1);
+          renderStageEditor();
+        })
+      );
+      head.appendChild(actions);
+      row.appendChild(head);
+
+      const fieldsWrap = document.createElement("div");
+      fieldsWrap.className = "stage-fields";
+      if (!propIds.length) {
+        fieldsWrap.innerHTML = '<span class="mode-hint">（请先勾选性能字段）</span>';
+      } else {
+        propIds.forEach((fid) => {
+          const takenElsewhere =
+            assigned.has(fid) && !(stage.fields || []).includes(fid);
+          const lab = document.createElement("label");
+          lab.className = "check-item";
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.value = fid;
+          cb.checked = (stage.fields || []).includes(fid);
+          cb.disabled = takenElsewhere;
+          cb.addEventListener("change", () => {
+            syncStageDraftFromDom();
+            renderStageEditor();
+          });
+          lab.appendChild(cb);
+          lab.appendChild(document.createTextNode(` ${fieldLabel(fid)}`));
+          if (takenElsewhere) {
+            lab.title = "已挂到其他阶段";
+          }
+          fieldsWrap.appendChild(lab);
+        });
+      }
+      row.appendChild(fieldsWrap);
+      box.appendChild(row);
+    });
+
+    const unassigned = propIds.filter((id) => !assigned.has(id));
+    if (unassigned.length) {
+      const hint = document.createElement("div");
+      hint.className = "mode-hint";
+      hint.textContent =
+        "未挂阶段：" + unassigned.map((id) => fieldLabel(id) + " (" + id + ")").join(", ");
+      box.appendChild(hint);
+    }
+  }
+
+  function loadConfigEditor() {
+    loadStageDraftFromOverlay();
+    fillStrategyForms();
+    renderStageEditor();
+  }
+
+  function buildStepsFromEditor() {
+    syncStageDraftFromDom();
+    const steps = [{ id: "entity", type: "entity", name: "骨架" }];
+    state.stageDraft.forEach((s) => {
+      const fields = (s.fields || []).slice();
+      steps.push({
+        id: s.id,
+        type: "property",
+        name: s.name || s.id,
+        group: inferGroup(fields, s.id),
+        fields,
+      });
+    });
+    return steps;
+  }
+
+  function addPropertyStage() {
+    syncStageDraftFromDom();
+    const id = "prop_" + Date.now().toString(36);
+    state.stageDraft.push({
+      id,
+      name: "新性能阶段",
+      group: id + "_properties",
+      fields: [],
+    });
+    renderStageEditor();
+  }
+
+  async function saveConfigView() {
+    if (!state.overlay) {
+      $("runStatus").textContent = "无覆盖层，无法保存配置。";
+      return;
+    }
+    const steps = buildStepsFromEditor();
+    const empty = steps.filter((s) => s.type === "property" && !(s.fields || []).length);
+    if (empty.length) {
+      $("runStatus").textContent =
+        "性能阶段不能为空：" + empty.map((s) => s.name || s.id).join(", ");
+      return;
+    }
+    const unassigned = propertyIdsSelected().filter(
+      (id) =>
+        !steps.some((s) => s.type === "property" && (s.fields || []).includes(id))
+    );
+    if (unassigned.length) {
+      $("runStatus").textContent = "未挂阶段的性能字段：" + unassigned.join(", ");
+      return;
+    }
+    state.overlay.steps = steps;
+    state.overlay.selected_field_ids = Array.from(selectedFieldIds());
+    state.overlay.property_source = readStrategyPropertySource();
+    state.overlay.figure_filter = readStrategyFigureFilter();
+    try {
+      await saveOverlay(state.overlay);
+      logChange("保存配置（字段 / 阶段 / 策略）");
+      $("runStatus").textContent = "配置已保存。需重新抽取后结果才按新配置。";
+      await refreshProjectConfig();
+    } catch (e) {
+      $("runStatus").textContent = "保存配置失败：" + e.message;
+    }
   }
 
   // ---------------------------------------------------------------- fields chips
@@ -1526,6 +1874,8 @@
     $("btnParseOnly").addEventListener("click", parseOnly);
     $("btnReextract").addEventListener("click", reextract);
     $("btnExport").addEventListener("click", exportProject);
+    $("btnSaveConfig").addEventListener("click", saveConfigView);
+    $("btnAddStage").addEventListener("click", addPropertyStage);
     $("btnNewProject").addEventListener("click", openNewProjectDialog);
     $("newProjectTemplate").addEventListener("change", (e) =>
       fillNewProjectChecks(e.target.value)

@@ -267,6 +267,119 @@ button.tiny,
   min-height: auto;
 }
 
+.check-item .rule-mini {
+  margin-left: 4px;
+  padding: 0 6px;
+  font-size: 11px;
+  min-height: 22px;
+}
+
+.config-section {
+  margin-top: 20px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.stage-editor {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.stage-row {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+
+.stage-row.entity-row {
+  background: #f5f7fa;
+}
+
+.stage-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.stage-row-head .stage-name {
+  flex: 1 1 160px;
+  min-width: 120px;
+}
+
+.stage-row-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.stage-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.stage-fields .check-item {
+  background: #f8fafc;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.strategy-section h3 {
+  margin-bottom: 8px;
+}
+
+.strategy-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+@media (max-width: 900px) {
+  .strategy-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.strategy-card {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfdff;
+  display: grid;
+  gap: 8px;
+}
+
+.strategy-card h4 {
+  margin: 0;
+}
+
+.strategy-card label {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.strategy-card textarea {
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 6px 8px;
+  resize: vertical;
+}
+
+.strategy-card .check-item {
+  color: var(--ink);
+}
+
 .field-result-list {
   display: grid;
   gap: 6px;
