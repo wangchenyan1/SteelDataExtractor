@@ -143,18 +143,28 @@
             <article class="source-pane">
               <div class="pane-title">
                 <h4>原文 / PDF</h4>
+                <div class="source-mode-tabs" id="sourceModeTabs">
+                  <button type="button" class="ghost tiny" data-source-mode="pdf" id="btnSourcePdf" hidden>PDF</button>
+                  <button type="button" class="ghost tiny" data-source-mode="html" id="btnSourceHtml" hidden>渲染</button>
+                  <button type="button" class="ghost tiny" data-source-mode="text" id="btnSourceText">文本</button>
+                </div>
                 <span id="sourceMeta">尚未载入</span>
               </div>
               <iframe id="pdfViewer" title="原文 PDF" hidden></iframe>
-              <pre id="paperTextViewer" class="paper-viewer">选择文献后点击“载入原文和最新结果”。如果找到 PDF，会优先显示 PDF；否则显示 parsed_results/paper.md。</pre>
+              <article id="paperHtmlViewer" class="paper-html-viewer" hidden></article>
+              <pre id="paperTextViewer" class="paper-viewer" hidden>选择文献后点击“载入原文和最新结果”。有 PDF 时优先显示 PDF；否则渲染完整 paper.md（含插图）。</pre>
             </article>
             <article class="result-pane">
               <div class="pane-title">
                 <h4>抽取结果 / Review</h4>
                 <span id="resultMeta">尚未载入</span>
               </div>
+              <div class="result-filter" id="resultFilter">
+                <label class="radio-inline"><input type="radio" name="reviewFilter" value="all" checked /> 全部</label>
+                <label class="radio-inline"><input type="radio" name="reviewFilter" value="rejected" /> 仅未通过</label>
+              </div>
               <div class="result-summary" id="resultSummary"></div>
-              <div id="resultFieldList" class="field-result-list"></div>
+              <div id="resultFieldList" class="result-tree"></div>
               <div id="resultReviewList" class="review-list"></div>
             </article>
           </div>
@@ -439,7 +449,15 @@
       </form>
     </dialog>
 
-    <script src="./readonly_snapshot.js?v=20260827_task9"></script>
-    <script src="./app.js?v=20260827_task9"></script>
+    <dialog id="thumbDialog" class="thumb-dialog">
+      <img id="thumbDialogImg" alt="放大图" />
+      <form method="dialog" class="dialog-actions">
+        <button value="cancel" class="ghost">关闭</button>
+      </form>
+    </dialog>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+    <script src="./readonly_snapshot.js?v=20260828_task9"></script>
+    <script src="./app.js?v=20260828_task9"></script>
   </body>
 </html>

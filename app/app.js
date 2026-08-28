@@ -78,6 +78,11 @@
     editingRule: null,
     view: "papers",
     stageDraft: [],
+    sourceMode: "text",
+    hasPdf: false,
+    hasMd: false,
+    reviewFilter: "all",
+    paperImageNames: [],
   };
 
   const FIELD_LEVELS = [
@@ -1544,22 +1549,30 @@
     return normalizeWs(text).indexOf(nEx) >= 0;
   }
 
-  /** 规范化空白后 indexOf；命中则用可伸缩空白的正则在原文定位并包 &lt;mark&gt; */
+  function setSourceMode(mode) {
+    state.sourceMode = mode;
+    const pdf = $("pdfViewer");
+    const html = $("paperHtmlViewer");
+    const text = $("paperTextViewer");
+    if (pdf) pdf.hidden = mode !== "pdf";
+    if (html) html.hidden = mode !== "html";
+    if (text) text.hidden = mode !== "text";
+    document.querySelectorAll("#sourceModeTabs [data-source-mode]").forEach((btn) => {
+      btn.classList.toggle("active", btn.getAttribute("data-source-mode") === mode);
+    });
+  }
+
+  /** 规范化空白后匹配；命中则切到文本视图并包 &lt;mark&gt; */
   function highlightExcerpt(paperText, excerpt) {
     const viewer = $("paperTextViewer");
-    const pdf = $("pdfViewer");
-    if (pdf && !pdf.hidden) {
-      pdf.hidden = true;
-      viewer.hidden = false;
-    }
-    const text = paperText || state.paperText || viewer.textContent || "";
+    setSourceMode("text");
+    const text = paperText || state.paperText || "";
     state.paperText = text;
     if (!excerptMatchesInText(text, excerpt)) {
       viewer.textContent = text;
       return false;
     }
     const nEx = normalizeWs(excerpt);
-    // 将规范化摘录转成允许空白伸缩的正则，在原文中找首个匹配
     const parts = nEx.split(" ").map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
     const re = new RegExp(parts.join("\\s+"));
     const m = text.match(re);
@@ -1588,114 +1601,423 @@
     return IDENTITY_IDS.has(key) || key === "sample_id" || key === "condition_id";
   }
 
-  function collectResultFields(result) {
-    const items = [];
-    const meta = result.paper_metadata || {};
-    Object.keys(meta).forEach((k) => {
-      if (isIdentityKey(k)) return;
-      items.push({ path: `paper_metadata.${k}`, key: k, raw: meta[k] });
-    });
-    (result.samples || []).forEach((s, i) => {
-      Object.keys(s || {}).forEach((k) => {
-        if (isIdentityKey(k)) return;
-        items.push({
-          path: `samples[${i}].${k}`,
-          key: k,
-          raw: s[k],
-          ctx: s.sample_id || `S${i + 1}`,
-        });
-      });
-    });
-    (result.conditions || []).forEach((c, i) => {
-      Object.keys(c || {}).forEach((k) => {
-        if (isIdentityKey(k) || k === "sample_id") return;
-        const v = c[k];
-        if (v && typeof v === "object" && !Array.isArray(v) && !isWrappedFact(v) && !("unit" in v)) {
-          // property group
-          Object.keys(v).forEach((pk) => {
-            items.push({
-              path: `conditions[${i}].${k}.${pk}`,
-              key: pk,
-              raw: v[pk],
-              ctx: c.condition_id || `C${i + 1}`,
-            });
-          });
-        } else {
-          items.push({
-            path: `conditions[${i}].${k}`,
-            key: k,
-            raw: v,
-            ctx: c.condition_id || `C${i + 1}`,
-          });
-        }
-      });
-    });
-    (result.figures || []).forEach((f, i) => {
-      Object.keys(f || {}).forEach((k) => {
-        if (isIdentityKey(k) || k === "sample_id" || k === "condition_id") return;
-        items.push({
-          path: `figures[${i}].${k}`,
-          key: k,
-          raw: f[k],
-          ctx: f.figure_id || `F${i + 1}`,
-        });
-      });
-    });
-    return items;
+  function isPropertyGroup(v) {
+    if (!v || typeof v !== "object" || Array.isArray(v) || isWrappedFact(v)) return false;
+    const vals = Object.values(v);
+    return vals.length > 0 && vals.every((x) => isWrappedFact(x));
   }
 
-  function renderResultFieldList(result) {
-    const box = $("resultFieldList");
-    const items = collectResultFields(result || {});
-    if (!items.length) {
-      box.innerHTML = '<div class="review-empty">暂无带出处的字段结果。</div>';
-      return;
+  function isRejectedStatus(raw) {
+    return !!(raw && typeof raw === "object" && raw.status === "rejected_by_rule");
+  }
+
+  function extractImageNamesFromMd(md) {
+    const names = [];
+    const re = /(?:images_from_md\/)([^)\s"']+)/g;
+    let m;
+    while ((m = re.exec(md || ""))) {
+      const name = PathBasename(m[1]);
+      if (name && !names.includes(name)) names.push(name);
     }
-    const paperText =
-      state.paperText || ($("paperTextViewer") && $("paperTextViewer").textContent) || "";
-    box.innerHTML = "";
-    items.forEach((it) => {
-      const raw = it.raw;
-      const wrapped = isWrappedFact(raw);
-      const value = formatDisplay(raw);
-      const location = wrapped ? raw.location || "" : "";
-      const excerpt = wrapped ? raw.excerpt || "" : "";
-      const hasExcerpt = !!excerpt;
-      // 渲染时即用与 highlightExcerpt 相同的规范化匹配判定「已定位」/「仅摘录」
-      let status = "无摘录";
-      if (hasExcerpt) {
-        status = excerptMatchesInText(paperText, excerpt) ? "已定位" : "仅摘录";
+    return names;
+  }
+
+  function PathBasename(p) {
+    const s = String(p || "").replace(/\\/g, "/");
+    const i = s.lastIndexOf("/");
+    return i >= 0 ? s.slice(i + 1) : s;
+  }
+
+  function rewriteMdImages(md, project, paperId) {
+    return String(md || "").replace(
+      /(!\[[^\]]*\]\()(?:\.\/)?images_from_md\/([^)\s]+)(\))/g,
+      (_, a, name, c) =>
+        a +
+        paperImageUrl(project, paperId, PathBasename(name)) +
+        c
+    );
+  }
+
+  function paperImageUrl(project, paperId, name) {
+    return (
+      `/api/paper_image?project=${encodeURIComponent(project || "")}` +
+      `&paper_id=${encodeURIComponent(paperId || "")}` +
+      `&name=${encodeURIComponent(name || "")}`
+    );
+  }
+
+  function figureImageName(fig) {
+    if (!fig) return null;
+    const direct = fig.image_file || fig.file_name || fig.filename || fig.path;
+    if (direct) return PathBasename(direct);
+    const idx = fig.placeholder_index;
+    const names = state.paperImageNames || [];
+    if (idx != null && names.length) {
+      const re = new RegExp("^fig" + String(idx) + "[._-]", "i");
+      const hit = names.find((n) => re.test(n));
+      if (hit) return hit;
+      if (names[idx - 1]) return names[idx - 1];
+    }
+    return null;
+  }
+
+  function renderMdToHtml(md, project, paperId) {
+    const rewritten = rewriteMdImages(md, project, paperId);
+    if (typeof marked !== "undefined" && marked && typeof marked.parse === "function") {
+      return marked.parse(rewritten);
+    }
+    // CDN 不可用时的降级：转义 + 换行 + 图片链接
+    return (
+      "<pre class=\"md-fallback\">" +
+      esc(rewritten).replace(
+        /!\[([^\]]*)\]\(([^)]+)\)/g,
+        (_, alt, src) => `</pre><p><img alt="${esc(alt)}" src="${esc(src)}" /></p><pre class="md-fallback">`
+      ) +
+      "</pre>"
+    );
+  }
+
+  async function loadSourcePane(project, paperId) {
+    const pdf = $("pdfViewer");
+    const html = $("paperHtmlViewer");
+    const text = $("paperTextViewer");
+    const btnPdf = $("btnSourcePdf");
+    const btnHtml = $("btnSourceHtml");
+    state.hasPdf = false;
+    state.hasMd = false;
+    state.paperImageNames = [];
+    try {
+      const meta = await api(
+        `/api/paper_meta?project=${encodeURIComponent(project)}&paper_id=${encodeURIComponent(paperId)}`
+      );
+      state.hasPdf = !!meta.has_pdf;
+      state.hasMd = !!meta.has_md;
+      if (btnPdf) btnPdf.hidden = !state.hasPdf;
+      if (btnHtml) btnHtml.hidden = !state.hasMd;
+    } catch (e) {
+      if (btnPdf) btnPdf.hidden = true;
+      if (btnHtml) btnHtml.hidden = true;
+    }
+    try {
+      const txt = await api(
+        `/api/paper_text?project=${encodeURIComponent(project)}&paper_id=${encodeURIComponent(paperId)}`
+      );
+      state.paperText = txt.text || "";
+      state.paperImageNames = extractImageNamesFromMd(state.paperText);
+      text.textContent = state.paperText;
+      if (state.hasMd || state.paperText) {
+        html.innerHTML = renderMdToHtml(state.paperText, project, paperId);
+        if (btnHtml) btnHtml.hidden = false;
+        state.hasMd = true;
       }
-      const el = document.createElement("button");
-      el.type = "button";
-      el.className = "field-result-item";
-      el.innerHTML =
-        `<span class="fr-path">${esc(it.path)}</span>` +
-        `<span class="fr-value">${esc(value)}${wrapped && raw.unit ? " " + esc(raw.unit) : ""}</span>` +
-        `<span class="fr-loc">${esc(location || "—")}</span>` +
-        `<span class="fr-status">${esc(status)}</span>` +
-        `<span class="fr-miss" hidden></span>`;
-      el.addEventListener("click", () => {
-        const miss = el.querySelector(".fr-miss");
-        const statusEl = el.querySelector(".fr-status");
-        if (!excerpt) {
+      $("sourceMeta").textContent =
+        `${paperId} · ${state.paperText.length} 字符` +
+        (state.hasPdf ? " · PDF" : "") +
+        (state.paperImageNames.length ? ` · ${state.paperImageNames.length} 图` : "");
+    } catch (e) {
+      state.paperText = "";
+      text.textContent = "载入原文失败：" + e.message;
+      html.innerHTML = "";
+      $("sourceMeta").textContent = "载入失败";
+    }
+    if (state.hasPdf) {
+      pdf.src =
+        `/api/paper_pdf?project=${encodeURIComponent(project)}&paper_id=${encodeURIComponent(paperId)}`;
+      setSourceMode("pdf");
+    } else if (state.hasMd) {
+      pdf.removeAttribute("src");
+      setSourceMode("html");
+    } else {
+      pdf.removeAttribute("src");
+      setSourceMode("text");
+    }
+  }
+
+  function attachFieldClick(el, raw) {
+    const excerpt = isWrappedFact(raw) ? raw.excerpt || "" : "";
+    const location = isWrappedFact(raw) ? raw.location || "" : "";
+    el.addEventListener("click", () => {
+      const miss = el.querySelector(".fr-miss");
+      const statusEl = el.querySelector(".fr-status");
+      if (!excerpt) {
+        if (miss) {
           miss.hidden = false;
-          miss.textContent = "无摘录可高亮";
-          return;
+          miss.textContent = location ? `无摘录可高亮 · ${location}` : "无摘录可高亮";
         }
-        const text = state.paperText || $("paperTextViewer").textContent || "";
-        const ok = highlightExcerpt(text, excerpt);
-        if (statusEl) statusEl.textContent = ok ? "已定位" : "仅摘录";
+        return;
+      }
+      const ok = highlightExcerpt(state.paperText, excerpt);
+      if (statusEl) statusEl.textContent = ok ? "已定位" : "仅摘录";
+      if (miss) {
         if (!ok) {
           miss.hidden = false;
-          miss.textContent = `仅摘录：${excerpt}`;
+          miss.textContent =
+            `仅摘录：${excerpt}` + (location ? ` · ${location}` : "");
         } else {
           miss.hidden = true;
           miss.textContent = "";
         }
-      });
-      box.appendChild(el);
+      }
     });
+  }
+
+  function buildFieldBlock(key, raw, opts) {
+    opts = opts || {};
+    const wrapped = isWrappedFact(raw);
+    const rejected = isRejectedStatus(raw);
+    if (state.reviewFilter === "rejected" && !rejected && !opts.forceShow) {
+      return null;
+    }
+    const value = formatDisplay(raw);
+    const location = wrapped ? raw.location || "" : "";
+    const excerpt = wrapped ? raw.excerpt || "" : "";
+    let excerptStatus = "无摘录";
+    if (excerpt) {
+      excerptStatus = excerptMatchesInText(state.paperText, excerpt) ? "已定位" : "仅摘录";
+    }
+    const label = fieldLabel(key);
+    const el = document.createElement("button");
+    el.type = "button";
+    el.className =
+      "field-result-item " + (rejected ? "field-rejected" : "field-accepted");
+    el.innerHTML =
+      `<span class="fr-label">${esc(label)}</span>` +
+      `<span class="fr-value">${esc(value)}${wrapped && raw.unit ? " " + esc(raw.unit) : ""}</span>` +
+      `<span class="fr-loc">${esc(location || "—")}</span>` +
+      `<span class="fr-status">${esc(excerptStatus)}</span>` +
+      (rejected && raw.reject_reason
+        ? `<span class="fr-reason">${esc(raw.reject_reason)}</span>`
+        : "") +
+      `<span class="fr-miss" hidden></span>`;
+    attachFieldClick(el, raw);
+    return el;
+  }
+
+  function buildThumb(fig, project, paperId) {
+    const name = figureImageName(fig);
+    const rejected = isRejectedStatus(fig);
+    const wrap = document.createElement("button");
+    wrap.type = "button";
+    wrap.className =
+      "fig-thumb " + (rejected ? "field-rejected" : "field-accepted");
+    wrap.title =
+      (fig.figure_id || "图") +
+      (fig.figure_type ? " · " + fig.figure_type : "") +
+      (rejected && fig.reject_reason ? " · " + fig.reject_reason : "");
+    if (name) {
+      const url = paperImageUrl(project, paperId, name);
+      wrap.innerHTML =
+        `<img src="${esc(url)}" alt="${esc(fig.figure_id || name)}" loading="lazy" />` +
+        `<span class="fig-thumb-cap">${esc(fig.figure_id || name)}</span>`;
+      wrap.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const dlg = $("thumbDialog");
+        const img = $("thumbDialogImg");
+        if (img) img.src = url;
+        if (dlg && dlg.showModal) dlg.showModal();
+      });
+    } else {
+      wrap.innerHTML =
+        `<span class="fig-thumb-missing">无图</span>` +
+        `<span class="fig-thumb-cap">${esc(fig.figure_id || "?")}</span>`;
+    }
+    if (rejected && fig.reject_reason) {
+      const reason = document.createElement("span");
+      reason.className = "fr-reason";
+      reason.textContent = fig.reject_reason;
+      wrap.appendChild(reason);
+    }
+    return wrap;
+  }
+
+  function figuresForNode(figures, sampleId, conditionId) {
+    return (figures || []).filter((f) => {
+      const sid = f.sample_id || null;
+      const cid = f.condition_id || null;
+      if (conditionId) {
+        return cid === conditionId;
+      }
+      return sid === sampleId && !cid;
+    });
+  }
+
+  function renderResultTree(result) {
+    const box = $("resultFieldList");
+    const project = state.currentId;
+    const paperId = currentPaperId();
+    const r = result || {};
+    box.innerHTML = "";
+    box.className = "result-tree";
+
+    let shown = 0;
+
+    // 文章信息
+    const metaSec = document.createElement("section");
+    metaSec.className = "tree-section";
+    metaSec.innerHTML = "<h5>文章信息</h5>";
+    const metaBody = document.createElement("div");
+    metaBody.className = "tree-fields";
+    const meta = r.paper_metadata || {};
+    Object.keys(meta).forEach((k) => {
+      if (isIdentityKey(k)) return;
+      const block = buildFieldBlock(k, meta[k]);
+      if (block) {
+        metaBody.appendChild(block);
+        shown++;
+      }
+    });
+    if (metaBody.children.length) {
+      metaSec.appendChild(metaBody);
+      box.appendChild(metaSec);
+    }
+
+    const figures = r.figures || [];
+    const conditions = r.conditions || [];
+    const samples = r.samples || [];
+
+    samples.forEach((s, si) => {
+      const sid = s.sample_id || `S${si + 1}`;
+      const sampleSec = document.createElement("section");
+      sampleSec.className = "tree-section tree-sample";
+      sampleSec.innerHTML = `<h5>样品 ${esc(sid)}</h5>`;
+
+      const sampleFields = document.createElement("div");
+      sampleFields.className = "tree-fields";
+      Object.keys(s || {}).forEach((k) => {
+        if (isIdentityKey(k)) return;
+        const block = buildFieldBlock(k, s[k]);
+        if (block) {
+          sampleFields.appendChild(block);
+          shown++;
+        }
+      });
+      if (sampleFields.children.length) sampleSec.appendChild(sampleFields);
+
+      // sample-level thumbs (no condition)
+      const sampleFigs = figuresForNode(figures, sid, null);
+      if (sampleFigs.length) {
+        const row = document.createElement("div");
+        row.className = "fig-thumb-row";
+        sampleFigs.forEach((f) => {
+          if (state.reviewFilter === "rejected" && !isRejectedStatus(f)) return;
+          row.appendChild(buildThumb(f, project, paperId));
+          shown++;
+        });
+        if (row.children.length) sampleSec.appendChild(row);
+      }
+
+      conditions
+        .filter((c) => (c.sample_id || "") === sid || (!c.sample_id && samples.length === 1))
+        .forEach((c, ci) => {
+          // Avoid double-listing conditions without sample_id on every sample
+          if (!c.sample_id && samples.length > 1 && si > 0) return;
+          const cid = c.condition_id || `C${ci + 1}`;
+          const condBlock = document.createElement("div");
+          condBlock.className = "tree-condition";
+          condBlock.innerHTML = `<h6>状态 ${esc(cid)}</h6>`;
+
+          const condFields = document.createElement("div");
+          condFields.className = "tree-fields";
+          Object.keys(c || {}).forEach((k) => {
+            if (isIdentityKey(k) || k === "sample_id") return;
+            const v = c[k];
+            if (isPropertyGroup(v)) {
+              Object.keys(v).forEach((pk) => {
+                const block = buildFieldBlock(pk, v[pk]);
+                if (block) {
+                  condFields.appendChild(block);
+                  shown++;
+                }
+              });
+            } else {
+              const block = buildFieldBlock(k, v);
+              if (block) {
+                condFields.appendChild(block);
+                shown++;
+              }
+            }
+          });
+          if (condFields.children.length) condBlock.appendChild(condFields);
+
+          const condFigs = figures.filter((f) => f.condition_id === cid);
+          if (condFigs.length) {
+            const row = document.createElement("div");
+            row.className = "fig-thumb-row";
+            condFigs.forEach((f) => {
+              if (state.reviewFilter === "rejected" && !isRejectedStatus(f)) return;
+              row.appendChild(buildThumb(f, project, paperId));
+              shown++;
+            });
+            if (row.children.length) condBlock.appendChild(row);
+          }
+
+          if (condBlock.querySelector(".field-result-item, .fig-thumb")) {
+            sampleSec.appendChild(condBlock);
+          }
+        });
+
+      if (sampleSec.querySelector(".field-result-item, .fig-thumb, .tree-condition")) {
+        box.appendChild(sampleSec);
+      }
+    });
+
+    // 图片总览
+    const figSec = document.createElement("section");
+    figSec.className = "tree-section tree-figures";
+    figSec.innerHTML = "<h5>图片总览</h5>";
+    const figRow = document.createElement("div");
+    figRow.className = "fig-thumb-row fig-overview";
+    figures.forEach((f) => {
+      if (state.reviewFilter === "rejected" && !isRejectedStatus(f)) return;
+      const card = document.createElement("div");
+      card.className =
+        "fig-card " + (isRejectedStatus(f) ? "field-rejected" : "field-accepted");
+      const thumb = buildThumb(f, project, paperId);
+      card.appendChild(thumb);
+      const metaLine = document.createElement("div");
+      metaLine.className = "fig-card-meta";
+      metaLine.textContent =
+        (f.figure_type || "") +
+        (f.sample_id ? ` · ${f.sample_id}` : "") +
+        (f.condition_id ? ` / ${f.condition_id}` : "");
+      card.appendChild(metaLine);
+      // figure field facts (non-id)
+      const extra = document.createElement("div");
+      extra.className = "tree-fields";
+      Object.keys(f || {}).forEach((k) => {
+        if (
+          isIdentityKey(k) ||
+          k === "sample_id" ||
+          k === "condition_id" ||
+          k === "figure_type" ||
+          k === "status" ||
+          k === "reject_reason" ||
+          k === "is_microstructure_image" ||
+          k === "is_post_test_image" ||
+          k === "scale_bar_info" ||
+          k === "image_file" ||
+          k === "file_name"
+        )
+          return;
+        if (!isWrappedFact(f[k])) return;
+        const block = buildFieldBlock(k, f[k]);
+        if (block) extra.appendChild(block);
+      });
+      if (extra.children.length) card.appendChild(extra);
+      figRow.appendChild(card);
+      shown++;
+    });
+    if (figRow.children.length) {
+      figSec.appendChild(figRow);
+      box.appendChild(figSec);
+    }
+
+    if (!shown) {
+      box.innerHTML =
+        state.reviewFilter === "rejected"
+          ? '<div class="review-empty">当前无规则未通过项。</div>'
+          : '<div class="review-empty">暂无带出处的字段结果。</div>';
+    }
   }
 
   // ---------------------------------------------------------------- review panes
@@ -1705,19 +2027,7 @@
       $("runStatus").textContent = "请先选择 paper_id。";
       return;
     }
-    try {
-      const txt = await api(
-        `/api/paper_text?project=${encodeURIComponent(state.currentId)}&paper_id=${encodeURIComponent(pid)}`
-      );
-      state.paperText = txt.text || "";
-      $("paperTextViewer").textContent = state.paperText;
-      $("pdfViewer").hidden = true;
-      $("paperTextViewer").hidden = false;
-      $("sourceMeta").textContent = `${pid} · ${state.paperText.length} 字符`;
-    } catch (e) {
-      $("paperTextViewer").textContent = "载入原文失败：" + e.message;
-      $("sourceMeta").textContent = "载入失败";
-    }
+    await loadSourcePane(state.currentId, pid);
     try {
       const runId = $("runSelect").value || "";
       const q =
@@ -1741,16 +2051,46 @@
       ? `${info.run_id} · ${info.mode || ""} · ${info.backend || ""}`
       : "";
     const trim = (r._pipeline && r._pipeline.input_trim) || {};
+    const rejectedCount = countRejected(r);
     $("resultSummary").innerHTML =
       `<span>样品 <b>${(r.samples || []).length}</b></span>` +
       `<span>状态 <b>${(r.conditions || []).length}</b></span>` +
       `<span>图片 <b>${(r.figures || []).length}</b></span>` +
       `<span>性能值 <b>${countProps(r)}</b></span>` +
+      `<span>未通过 <b>${rejectedCount}</b></span>` +
       (trim.kept_ratio != null
         ? `<span>输入保留 <b>${(trim.kept_ratio * 100).toFixed(1)}%</b></span>`
         : "");
-    renderResultFieldList(r);
+    renderResultTree(r);
     renderWarnings("resultReviewList", res.warnings);
+  }
+
+  function countRejected(result) {
+    let n = 0;
+    const meta = result.paper_metadata || {};
+    Object.values(meta).forEach((v) => {
+      if (isRejectedStatus(v)) n++;
+    });
+    (result.samples || []).forEach((s) => {
+      Object.values(s || {}).forEach((v) => {
+        if (isRejectedStatus(v)) n++;
+      });
+    });
+    (result.conditions || []).forEach((c) => {
+      Object.keys(c || {}).forEach((k) => {
+        if (isIdentityKey(k) || k === "sample_id") return;
+        const v = c[k];
+        if (isPropertyGroup(v)) {
+          Object.values(v).forEach((pv) => {
+            if (isRejectedStatus(pv)) n++;
+          });
+        } else if (isRejectedStatus(v)) n++;
+      });
+    });
+    (result.figures || []).forEach((f) => {
+      if (isRejectedStatus(f)) n++;
+    });
+    return n;
   }
 
   async function refreshRuns() {
@@ -1938,6 +2278,16 @@
     $("pdfPathInput").addEventListener("input", updateRunPreview);
     $("loadReviewBtn").addEventListener("click", loadReview);
     $("refreshRunBtn").addEventListener("click", refreshRuns);
+    document.querySelectorAll("#sourceModeTabs [data-source-mode]").forEach((btn) => {
+      btn.addEventListener("click", () => setSourceMode(btn.getAttribute("data-source-mode")));
+    });
+    document.querySelectorAll('input[name="reviewFilter"]').forEach((inp) => {
+      inp.addEventListener("change", () => {
+        if (!inp.checked) return;
+        state.reviewFilter = inp.value;
+        if (state.currentResult) renderResultTree(state.currentResult);
+      });
+    });
     $("addFieldBtn").addEventListener("click", () => $("fieldDialog").showModal());
     $("copyPromptBtn").addEventListener("click", () => {
       navigator.clipboard && navigator.clipboard.writeText(state.prompts[state.promptTab] || "");

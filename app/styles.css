@@ -380,17 +380,18 @@ button.tiny,
   color: var(--ink);
 }
 
-.field-result-list {
+.field-result-list,
+.result-tree {
   display: grid;
-  gap: 6px;
+  gap: 10px;
   margin-bottom: 10px;
-  max-height: 280px;
+  max-height: 560px;
   overflow: auto;
 }
 
 .field-result-item {
   display: grid;
-  grid-template-columns: 1.4fr 1fr 0.7fr 0.6fr;
+  grid-template-columns: 1.2fr 1fr 0.7fr 0.55fr;
   gap: 8px;
   text-align: left;
   border: 1px solid var(--line);
@@ -407,10 +408,25 @@ button.tiny,
   background: #eef6ff;
 }
 
-.fr-path {
+.field-result-item.field-accepted {
+  border-left: 4px solid #3d9b84;
+}
+
+.field-result-item.field-rejected {
+  border-left: 4px solid #c47a2c;
+  background: #fff8ef;
+}
+
+.field-result-item.field-rejected:hover {
+  background: #fff1df;
+}
+
+.fr-path,
+.fr-label {
   font-size: 12px;
   color: var(--blue);
-  word-break: break-all;
+  word-break: break-word;
+  font-weight: 600;
 }
 
 .fr-value {
@@ -424,6 +440,16 @@ button.tiny,
   color: var(--muted);
 }
 
+.fr-reason {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: #9a5b12;
+  background: #fff3e0;
+  border: 1px solid #f0c49a;
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+
 .fr-miss {
   grid-column: 1 / -1;
   font-size: 12px;
@@ -432,6 +458,177 @@ button.tiny,
   border: 1px solid #f0c49a;
   border-radius: 4px;
   padding: 4px 6px;
+}
+
+.result-filter {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.source-mode-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.source-mode-tabs .active {
+  border-color: var(--blue);
+  color: var(--blue);
+  background: #eef6ff;
+}
+
+.paper-html-viewer {
+  max-height: 640px;
+  min-height: 640px;
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  line-height: 1.65;
+}
+
+.paper-html-viewer img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 10px 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+
+.paper-html-viewer h1,
+.paper-html-viewer h2,
+.paper-html-viewer h3 {
+  margin: 0.8em 0 0.4em;
+}
+
+.tree-section {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px;
+}
+
+.tree-section h5 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.tree-condition {
+  margin-top: 8px;
+  padding: 8px;
+  border: 1px dashed var(--line);
+  border-radius: 6px;
+  background: white;
+}
+
+.tree-condition h6 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.tree-fields {
+  display: grid;
+  gap: 6px;
+}
+
+.fig-thumb-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.fig-thumb {
+  width: 112px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  cursor: pointer;
+  font: inherit;
+  text-align: center;
+  color: var(--ink);
+}
+
+.fig-thumb.field-accepted {
+  border-left: 3px solid #3d9b84;
+}
+
+.fig-thumb.field-rejected {
+  border-left: 3px solid #c47a2c;
+  background: #fff8ef;
+}
+
+.fig-thumb img {
+  width: 100%;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 4px;
+  background: #eef2f6;
+}
+
+.fig-thumb-cap {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.fig-thumb-missing {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 72px;
+  font-size: 12px;
+  color: var(--muted);
+  background: #eef2f6;
+  border-radius: 4px;
+}
+
+.fig-card {
+  min-width: 140px;
+  max-width: 200px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+}
+
+.fig-card.field-rejected {
+  background: #fff8ef;
+  border-color: #f0c49a;
+}
+
+.fig-card .fig-thumb {
+  width: 100%;
+  border: none;
+  padding: 0;
+  background: transparent;
+}
+
+.fig-card-meta {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.thumb-dialog {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  max-width: min(860px, 94vw);
+}
+
+.thumb-dialog img {
+  max-width: 100%;
+  max-height: 70vh;
+  display: block;
+  margin: 0 auto 10px;
 }
 
 #paperTextViewer mark {
@@ -680,6 +877,7 @@ input[readonly] {
   gap: 12px;
   align-items: center;
   margin-bottom: 10px;
+  flex-wrap: wrap;
 }
 
 .pane-title h4 {
@@ -709,7 +907,7 @@ input[readonly] {
 
 .result-summary {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
   gap: 8px;
   margin-bottom: 10px;
 }
