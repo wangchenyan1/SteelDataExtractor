@@ -1101,21 +1101,52 @@
   }
 
   // ---------------------------------------------------------------- export
+  function downloadJsonBlob(data, filename) {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
   async function exportProject() {
     if (!state.currentId) return;
     try {
       const data = await api(`/api/projects/${encodeURIComponent(state.currentId)}/export`);
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = `${state.currentId}_fields_schema.json`;
-      a.click();
-      URL.revokeObjectURL(a.href);
-      logChange(`导出 ${state.currentId}_fields_schema.json`);
-      $("runStatus").textContent = "已下载导出文件。";
+      const filename = `${state.currentId}_fields_schema.json`;
+      downloadJsonBlob(data, filename);
+      logChange(`导出 ${filename}`);
+      $("runStatus").textContent = "已下载项目配置。";
     } catch (e) {
       $("runStatus").textContent = "导出失败：" + e.message;
     }
+  }
+
+  async function exportResults() {
+    if (!state.currentId) return;
+    const includeRejected = $("includeRejected").checked;
+    const paperId = currentPaperId();
+    const qs = new URLSearchParams({ include_rejected: includeRejected ? "true" : "false" });
+    if (paperId) qs.set("paper_id", paperId);
+    try {
+      const data = await api(
+        `/api/projects/${encodeURIComponent(state.currentId)}/export_results?${qs}`
+      );
+      const filename = paperId
+        ? `${state.currentId}_${paperId}_results.json`
+        : `${state.currentId}_results.json`;
+      downloadJsonBlob(data, filename);
+      logChange(`导出 ${filename}`);
+      $("runStatus").textContent = "已下载抽取结果。";
+    } catch (e) {
+      $("runStatus").textContent = "导出结果失败：" + e.message;
+    }
+  }
+
+  function setLegacyDevPanelsVisible(visible) {
+    const box = $("legacyDevPanels");
+    if (box) box.hidden = !visible;
   }
 
   // ---------------------------------------------------------------- new project
@@ -2256,6 +2287,10 @@
       loadReview();
     };
     $("btnExport").addEventListener("click", exportProject);
+    $("btnExportResults").addEventListener("click", exportResults);
+    $("toggleLegacyDev").addEventListener("change", (e) => {
+      setLegacyDevPanelsVisible(e.target.checked);
+    });
     $("btnSaveConfig").addEventListener("click", saveConfigView);
     $("btnAddStage").addEventListener("click", addPropertyStage);
     $("btnNewProject").addEventListener("click", openNewProjectDialog);

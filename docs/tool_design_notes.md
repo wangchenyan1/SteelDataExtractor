@@ -39,13 +39,18 @@ unmatched_properties
 
 ## 当前状态
 
-工作台已按规格落地（详见 `docs/superpowers/specs/2026-08-27-configurable-extract-tool-design.md`）：
+工作台已按规格落地。基础配置与流水线见 `docs/superpowers/specs/2026-08-27-configurable-extract-tool-design.md`；**UI 任务流、阶段可配、规则未通过展示与导出**以 `docs/superpowers/specs/2026-08-28-extract-workbench-ux-design.md` 为准。
 
-- 流水线：可选 PDF 解析（UniParser，需 `UNIPARSER_API_KEY`）→ 按节剪裁 refs/ack → 骨架 → 性能组 → 图片 → 校验合并
-- 四个入口：整篇一次跑完、分阶段、只解析、单字段/批量重抽
-- 三层配置：模板 + 公共字段库 + 项目覆盖层；支持勾选、覆盖、写回库、提升私有字段、导出 fields+schema
-- 结果字段带 `excerpt` / `location`，工作台可高亮；`demo_steel` 用 mock 后端离线可跑，不依赖 UniParser / LLM key
-- 不写回 `Extract_data`；旧四个只读快照项目未迁到新结构
+已实现要点：
+
+- 五视图导航：项目 → 配置 → 文献与运行 → 复核 → 导出
+- 项目级性能阶段计划（`steps`）可编辑；运行时以覆盖层为准
+- 规则校验与图片策略改为**标记** `status=rejected_by_rule`，结果仍保留在树中
+- 复核：PDF 优先 / 渲染 md、层级结果、异色、缩略图
+- 导出：项目配置（含阶段）与抽取结果；结果可选 `include_rejected`
+- 四个 CLI/API 入口：整篇、分阶段、只解析、单字段重抽
+- 三层配置：模板 + 公共字段库 + 项目覆盖层
+- `demo_steel` 用 mock 后端离线可跑；不写回 `Extract_data`
 
 ## 测试结果保存策略
 

@@ -262,6 +262,18 @@
           </div>
           <div class="export-actions">
             <button id="btnExport" class="primary">导出项目配置</button>
+            <button id="btnExportResults" class="primary">导出抽取结果</button>
+            <label class="export-option">
+              <input id="includeRejected" type="checkbox" checked />
+              含规则未通过
+            </label>
+            <p class="mode-hint">结果导出当前文献；未选文献时导出本项目全部已抽文献。</p>
+          </div>
+          <div class="export-advanced">
+            <label>
+              <input id="toggleLegacyDev" type="checkbox" />
+              高级：显示 Schema / Prompt / 快照等开发面板
+            </label>
           </div>
         </section>
 
