@@ -311,7 +311,7 @@ def classify_figures(figures: list, field_config: dict, apply_filter: bool) -> t
     kept = []
     for fig in figures or []:
         if not apply_filter:
-            kept.append(fig)
+            kept.append({**fig, "status": "accepted"})
             continue
         ftype = fig.get("figure_type")
         reason = None
@@ -328,8 +328,9 @@ def classify_figures(figures: list, field_config: dict, apply_filter: bool) -> t
                 "figure_type": ftype,
                 "detail": f"{fig.get('figure_id')} 被过滤：{reason}",
             })
+            kept.append({**fig, "status": "rejected_by_rule", "reject_reason": reason})
             continue
-        kept.append(fig)
+        kept.append({**fig, "status": "accepted"})
     return kept, warnings
 
 
