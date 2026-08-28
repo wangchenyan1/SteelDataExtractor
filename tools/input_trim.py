@@ -4,6 +4,13 @@ from __future__ import annotations
 
 import re
 
+try:
+    from patent_text_filter import build_filtered_text
+except ImportError:
+    from tools.patent_text_filter import build_filtered_text
+
+ALLOWED_DOCUMENT_KINDS = frozenset({"paper", "patent"})
+
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
 ARABIC_PREFIX_RE = re.compile(r"^\d+[\.\)]\s*")
 ROMAN_PREFIX_RE = re.compile(r"^[IVXLCDM]+\.\s*", re.IGNORECASE)
@@ -110,3 +117,40 @@ def trim_input(text: str) -> tuple[str, dict]:
         "removed_sections": removed_sections,
         "skipped_too_early": skipped_too_early,
     }
+
+
+def normalize_document_kind(value) -> str:
+    if value is None:
+        return "paper"
+    kind = str(value).strip()
+    if kind == "":
+        return "paper"
+    if kind not in ALLOWED_DOCUMENT_KINDS:
+        raise ValueError(f"非法 document_kind: {kind}，仅允许 paper 或 patent")
+    return kind
+
+
+def prepare_model_text(text: str, document_kind=None, paper_id: str = "") -> tuple[str, dict]:
+    kind = normalize_document_kind(document_kind)
+    raw = text or ""
+    if kind == "paper":
+        kept, stats = trim_input(raw)
+        stats = dict(stats)
+        stats["document_kind"] = "paper"
+        return kept, stats
+
+    filtered = build_filtered_text(raw, paper_id=paper_id or "")
+    header = ""
+    if filtered.title or paper_id:
+        header = f"# {filtered.title}\n\n[文档ID] {paper_id}\n\n"
+    body_len = max(len(filtered.core_text) - len(header), 0)
+    raw_len = len(raw)
+    stats = {
+        "raw_chars": raw_len,
+        "kept_chars": len(filtered.core_text),
+        "kept_ratio": round(body_len / raw_len, 4) if raw_len else 1.0,
+        "dropped_chars": max(raw_len - body_len, 0),
+        "document_kind": "patent",
+        "core_start_found": filtered.core_start is not None,
+    }
+    return filtered.core_text, stats

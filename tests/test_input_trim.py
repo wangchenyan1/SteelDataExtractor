@@ -1,4 +1,6 @@
-from tools.input_trim import trim_input
+import pytest
+
+from tools.input_trim import normalize_document_kind, prepare_model_text, trim_input
 
 _PAD = "body padding. " * 80  # push end-matter headings past 50% mark
 
@@ -75,3 +77,35 @@ def test_skips_heading_in_first_half():
     kept, stats = trim_input(EARLY)
     assert "related work" in kept
     assert stats["skipped_too_early"]
+
+
+def test_normalize_document_kind_defaults_and_rejects():
+    assert normalize_document_kind(None) == "paper"
+    assert normalize_document_kind("") == "paper"
+    assert normalize_document_kind("patent") == "patent"
+    with pytest.raises(ValueError, match="非法 document_kind"):
+        normalize_document_kind("book")
+
+
+def test_prepare_paper_matches_trim_input():
+    kept_a, stats_a = trim_input(APPENDIX_AFTER_REFS)
+    kept_b, stats_b = prepare_model_text(APPENDIX_AFTER_REFS, "paper")
+    assert kept_a == kept_b
+    assert stats_b["document_kind"] == "paper"
+    assert "keep this appendix table" in kept_b
+    assert "[1] Smith 2019" not in kept_b
+
+
+def test_prepare_patent_uses_core_text():
+    text = """摘要
+不要这段。
+
+具体实施方式
+实施例1 保留这段实测硬度 180 HV。
+"""
+    kept, stats = prepare_model_text(text, "patent", paper_id="x1")
+    assert "保留这段实测硬度 180 HV" in kept
+    assert "不要这段" not in kept
+    assert stats["document_kind"] == "patent"
+    assert stats["core_start_found"] is True
+    assert stats["raw_chars"] == len(text)
