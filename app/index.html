@@ -15,27 +15,38 @@
         <div class="safe-badge" id="modeBadge">远端测试工作区 · 结果写入 test_runs · 不写入 Extract_data</div>
     </header>
 
+    <nav class="view-nav" id="viewNav">
+      <button type="button" data-view="project">项目</button>
+      <button type="button" data-view="config">配置</button>
+      <button type="button" data-view="papers">文献与运行</button>
+      <button type="button" data-view="review">复核</button>
+      <button type="button" data-view="export">导出</button>
+    </nav>
+
     <main class="layout">
       <aside class="sidebar">
-        <section>
+        <section data-view-panel="project">
           <div class="panel-title">
             <h2>项目</h2>
             <button class="ghost tiny" id="btnNewProject">新建</button>
           </div>
           <div class="project-list" id="projectList"></div>
         </section>
-        <section>
+        <section data-view-panel="papers">
           <h2>抽取步骤</h2>
           <ol class="steps" id="stepList"></ol>
         </section>
       </aside>
 
       <section class="content">
-        <section class="intro">
+        <section class="intro" data-view-panel="project">
           <div>
             <h2 id="projectTitle">核聚变低磁奥氏体钢</h2>
             <p id="projectDesc"></p>
           </div>
+        </section>
+
+        <section class="intro" data-view-panel="papers">
           <div class="run-actions" id="runActions">
             <button class="primary" id="btnRunAll">整篇一次跑完</button>
             <button class="primary" id="btnRunStep">跑当前步骤</button>
@@ -51,7 +62,7 @@
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel" data-view-panel="config">
           <div class="panel-title">
             <h3>模型接口配置</h3>
             <span class="mode-hint">试跑配置 · API key 由远端 .env 提供</span>
@@ -73,7 +84,7 @@
           <div id="modelInfo" class="model-info"></div>
         </section>
 
-        <section class="panel">
+        <section class="panel" data-view-panel="papers">
           <div class="panel-title">
             <h3>文献输入</h3>
             <span class="mode-hint">使用已有 parsed_results/paper.md，或提供 PDF 路径解析</span>
@@ -111,7 +122,7 @@
           <pre id="paperRunPreview" class="run-preview"></pre>
         </section>
 
-        <section class="panel review-workbench">
+        <section class="panel review-workbench" data-view-panel="review">
           <div class="panel-title">
             <h3>运行与结果 Review</h3>
             <span class="mode-hint" id="apiStatus">后端未检测</span>
@@ -149,7 +160,20 @@
           </div>
         </section>
 
-        <section class="cards">
+        <section class="panel" data-view-panel="config">
+            <div class="panel-title">
+              <h3>字段配置</h3>
+              <div class="field-config-actions">
+                <button id="addFieldBtn" class="ghost">新增字段</button>
+              </div>
+            </div>
+            <div id="fieldLibraryPanel" class="field-library-panel">
+              <p class="mode-hint">从公共字段库勾选（写入项目覆盖层 selected_field_ids）</p>
+              <div id="fieldLibraryChecks" class="field-library-checks"></div>
+            </div>
+        </section>
+
+        <section class="cards" data-view-panel="config">
           <article>
             <span>文献</span>
             <strong id="paperCount">24</strong>
@@ -176,96 +200,95 @@
           </article>
         </section>
 
-        <section class="panel">
-            <div class="panel-title">
-              <h3>字段配置</h3>
-              <div class="field-config-actions">
-                <button id="btnExport" class="ghost">导出</button>
-                <button id="addFieldBtn" class="ghost">新增字段</button>
-              </div>
+        <section class="panel" data-view-panel="export">
+          <div class="panel-title">
+            <h3>导出</h3>
+            <span class="mode-hint">下载项目字段配置或抽取结果</span>
+          </div>
+          <div class="export-actions">
+            <button id="btnExport" class="primary">导出项目配置</button>
+          </div>
+        </section>
+
+        <div id="legacyDevPanels" hidden>
+          <div class="field-columns five">
+            <div>
+              <h4>文章字段</h4>
+              <div id="metadataFields" class="chips"></div>
             </div>
-            <div id="fieldLibraryPanel" class="field-library-panel">
-              <p class="mode-hint">从公共字段库勾选（写入项目覆盖层 selected_field_ids）</p>
-              <div id="fieldLibraryChecks" class="field-library-checks"></div>
+            <div>
+              <h4>样品字段</h4>
+              <div id="sampleFields" class="chips"></div>
             </div>
-            <div class="field-columns five">
-              <div>
-                <h4>文章字段</h4>
-                <div id="metadataFields" class="chips"></div>
-              </div>
-              <div>
-                <h4>样品字段</h4>
-                <div id="sampleFields" class="chips"></div>
-              </div>
-              <div>
-                <h4>状态字段</h4>
-                <div id="conditionFields" class="chips"></div>
-              </div>
-              <div>
-                <h4>性质字段</h4>
-                <div id="propertyFields" class="chips"></div>
-              </div>
-              <div>
-                <h4>图片字段</h4>
-                <div id="figureFields" class="chips"></div>
-              </div>
+            <div>
+              <h4>状态字段</h4>
+              <div id="conditionFields" class="chips"></div>
             </div>
-        </section>
-
-        <section class="grid two">
-          <article class="panel">
-            <h3>文章信息抽取</h3>
-            <pre id="metadataOutput"></pre>
-          </article>
-
-          <article class="panel">
-            <div class="panel-title">
-              <h3>完整抽取 Schema（按当前字段配置）</h3>
-              <button id="copySchemaBtn" class="ghost">复制 Schema</button>
+            <div>
+              <h4>性质字段</h4>
+              <div id="propertyFields" class="chips"></div>
             </div>
-            <pre id="schemaPreview"></pre>
-          </article>
-        </section>
-
-        <section class="grid three">
-          <article class="panel">
-            <h3>样品-状态骨架（Stage1）</h3>
-            <pre id="entityOutput"></pre>
-          </article>
-          <article class="panel">
-            <h3>性能步骤输出（每步一次调用）</h3>
-            <pre id="propertyOutput"></pre>
-          </article>
-          <article class="panel">
-            <h3>人工 Review 视图</h3>
-            <div id="reviewList" class="review-list"></div>
-          </article>
-        </section>
-
-        <section class="panel">
-          <h3>图片信息抽取</h3>
-          <pre id="figureOutput"></pre>
-        </section>
-
-        <section class="grid two">
-          <article class="panel">
-            <div class="panel-title">
-              <h3>Prompt 整合预览</h3>
-              <button id="copyPromptBtn" class="ghost">复制预览</button>
+            <div>
+              <h4>图片字段</h4>
+              <div id="figureFields" class="chips"></div>
             </div>
-            <div class="tabs" id="promptTabs"></div>
-            <pre id="promptPreview"></pre>
-          </article>
-          <article class="panel">
-            <h3>配置变更记录</h3>
-            <div id="changeLog" class="review-list"></div>
-          </article>
-        </section>
+          </div>
 
-        <section class="panel">
-          <h3>只读快照 · 真实输出样例</h3>
-          <div id="snapshotPapers" class="paper-table"></div>
-        </section>
+          <section class="grid two">
+            <article class="panel">
+              <h3>文章信息抽取</h3>
+              <pre id="metadataOutput"></pre>
+            </article>
+
+            <article class="panel">
+              <div class="panel-title">
+                <h3>完整抽取 Schema（按当前字段配置）</h3>
+                <button id="copySchemaBtn" class="ghost">复制 Schema</button>
+              </div>
+              <pre id="schemaPreview"></pre>
+            </article>
+          </section>
+
+          <section class="grid three">
+            <article class="panel">
+              <h3>样品-状态骨架（Stage1）</h3>
+              <pre id="entityOutput"></pre>
+            </article>
+            <article class="panel">
+              <h3>性能步骤输出（每步一次调用）</h3>
+              <pre id="propertyOutput"></pre>
+            </article>
+            <article class="panel">
+              <h3>人工 Review 视图</h3>
+              <div id="reviewList" class="review-list"></div>
+            </article>
+          </section>
+
+          <section class="panel">
+            <h3>图片信息抽取</h3>
+            <pre id="figureOutput"></pre>
+          </section>
+
+          <section class="grid two">
+            <article class="panel">
+              <div class="panel-title">
+                <h3>Prompt 整合预览</h3>
+                <button id="copyPromptBtn" class="ghost">复制预览</button>
+              </div>
+              <div class="tabs" id="promptTabs"></div>
+              <pre id="promptPreview"></pre>
+            </article>
+            <article class="panel">
+              <h3>配置变更记录</h3>
+              <div id="changeLog" class="review-list"></div>
+            </article>
+          </section>
+
+          <section class="panel">
+            <h3>只读快照 · 真实输出样例</h3>
+            <div id="snapshotPapers" class="paper-table"></div>
+          </section>
+        </div>
       </section>
     </main>
 

@@ -51,6 +51,40 @@ h1 {
   border-radius: 6px;
 }
 
+.view-nav {
+  display: flex;
+  gap: 8px;
+  padding: 12px 32px;
+  background: white;
+  border-bottom: 1px solid var(--line);
+}
+
+.view-nav button {
+  border: 1px solid var(--line);
+  background: white;
+  color: var(--muted);
+  border-radius: 6px;
+  padding: 8px 16px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.view-nav button:hover {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.view-nav button.active {
+  color: var(--blue);
+  border-color: var(--blue);
+  background: #eef6ff;
+  font-weight: 600;
+}
+
+.export-actions {
+  margin-top: 14px;
+}
+
 .layout {
   display: grid;
   grid-template-columns: 260px 1fr;

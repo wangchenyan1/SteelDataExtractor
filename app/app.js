@@ -75,6 +75,7 @@
     lastRunId: null,
     currentResult: null,
     editingRule: null,
+    view: "papers",
   };
 
   const FIELD_LEVELS = [
@@ -97,9 +98,20 @@
     return data;
   }
 
+  function setView(name) {
+    state.view = name;
+    document.querySelectorAll("[data-view-panel]").forEach((el) => {
+      el.hidden = el.getAttribute("data-view-panel") !== name;
+    });
+    document.querySelectorAll("#viewNav [data-view]").forEach((btn) => {
+      btn.classList.toggle("active", btn.getAttribute("data-view") === name);
+    });
+  }
+
   // ---------------------------------------------------------------- init
   async function init() {
     bindEvents();
+    setView(state.view);
     await checkHealth();
     try {
       const payload = await api("/api/projects");
@@ -1506,6 +1518,9 @@
 
   // ---------------------------------------------------------------- events
   function bindEvents() {
+    document.querySelectorAll("#viewNav [data-view]").forEach((btn) => {
+      btn.addEventListener("click", () => setView(btn.getAttribute("data-view")));
+    });
     $("btnRunAll").addEventListener("click", runAll);
     $("btnRunStep").addEventListener("click", runStep);
     $("btnParseOnly").addEventListener("click", parseOnly);
