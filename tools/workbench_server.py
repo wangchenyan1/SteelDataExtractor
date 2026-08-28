@@ -43,7 +43,95 @@ STATIC_TYPES = {
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".svg": "image/svg+xml",
+    ".pdf": "application/pdf",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
 }
+
+
+class BinaryBody:
+    """Non-JSON GET payload (PDF / images)."""
+
+    __slots__ = ("data", "content_type")
+
+    def __init__(self, data: bytes, content_type: str):
+        self.data = data
+        self.content_type = content_type
+
+
+def resolve_paper_image_path(
+    root: Path, project_id: str, paper_id: str, name: str
+) -> Path | None:
+    """Resolve basename under images_from_md/; reject path traversal."""
+    if not name or Path(name).name != name:
+        return None
+    try:
+        cfg = pipeline.load_workspace_config(root)["projects"].get(project_id)
+        if not cfg:
+            return None
+        parsed = pipeline._resolve_parsed_dir(root, cfg)
+        if not parsed:
+            return None
+        images_dir = (parsed / paper_id / "images_from_md").resolve()
+        candidate = (images_dir / name).resolve()
+        if not candidate.is_relative_to(images_dir):
+            return None
+        if not candidate.is_file():
+            return None
+        return candidate
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def resolve_paper_pdf_path(root: Path, project_id: str, paper_id: str) -> Path | None:
+    try:
+        cfg = pipeline.load_workspace_config(root)["projects"].get(project_id)
+        if not cfg:
+            return None
+        parsed = pipeline._resolve_parsed_dir(root, cfg)
+        if not parsed:
+            return None
+        paper_dir = parsed / paper_id
+        for fname in ("source.pdf", f"{paper_id}.pdf"):
+            p = paper_dir / fname
+            if p.is_file():
+                return p
+        return None
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def paper_meta(root: Path, project_id: str, paper_id: str) -> dict | None:
+    try:
+        cfg = pipeline.load_workspace_config(root)["projects"].get(project_id)
+        if not cfg:
+            return None
+        parsed = pipeline._resolve_parsed_dir(root, cfg)
+        if not parsed:
+            return None
+        paper_dir = parsed / paper_id
+        if not paper_dir.is_dir():
+            return None
+        images_dir = paper_dir / "images_from_md"
+        image_count = 0
+        if images_dir.is_dir():
+            image_count = sum(1 for p in images_dir.iterdir() if p.is_file())
+        has_pdf = resolve_paper_pdf_path(root, project_id, paper_id) is not None
+        has_md = (paper_dir / "paper.md").is_file()
+        return {
+            "paper_id": paper_id,
+            "has_pdf": has_pdf,
+            "has_md": has_md,
+            "image_count": image_count,
+        }
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def _parse_bool_qs(val, default: bool = True) -> bool:
+    if val is None:
+        return default
+    return str(val).lower() not in ("0", "false", "no", "")
 
 
 def build_projects_payload() -> dict:
@@ -200,8 +288,8 @@ def _run_payload(out: dict) -> dict:
     }
 
 
-def handle_get(route: str, qs: dict) -> tuple[int, dict]:
-    """Route GET API; returns (status, json_body)."""
+def handle_get(route: str, qs: dict) -> tuple[int, dict | BinaryBody]:
+    """Route GET API; returns (status, json_body | BinaryBody)."""
     parts = route.strip("/").split("/")
 
     if route == "/api/health":
@@ -217,6 +305,29 @@ def handle_get(route: str, qs: dict) -> tuple[int, dict]:
         if text is None:
             return 404, {"error": "paper.md 未找到（该项目可能是只读快照，本地无原文）"}
         return 200, {"paper_id": _q(qs, "paper_id"), "text": text}
+    if route == "/api/paper_meta":
+        project_id = _q(qs, "project", "")
+        paper_id = _q(qs, "paper_id", "")
+        meta = paper_meta(ROOT, project_id, paper_id)
+        if meta is None:
+            return 404, {"error": "paper 未找到"}
+        return 200, meta
+    if route == "/api/paper_pdf":
+        project_id = _q(qs, "project", "")
+        paper_id = _q(qs, "paper_id", "")
+        pdf = resolve_paper_pdf_path(ROOT, project_id, paper_id)
+        if pdf is None:
+            return 404, {"error": "PDF 未找到"}
+        return 200, BinaryBody(pdf.read_bytes(), "application/pdf")
+    if route == "/api/paper_image":
+        project_id = _q(qs, "project", "")
+        paper_id = _q(qs, "paper_id", "")
+        name = _q(qs, "name", "")
+        img = resolve_paper_image_path(ROOT, project_id, paper_id, name)
+        if img is None:
+            return 404, {"error": "image 未找到或路径非法"}
+        ctype = STATIC_TYPES.get(img.suffix.lower(), "application/octet-stream")
+        return 200, BinaryBody(img.read_bytes(), ctype)
     if route == "/api/runs":
         cfg = pipeline.load_workspace_config(ROOT)["projects"].get(_q(qs, "project"), {})
         return 200, {"runs": pipeline.list_runs(ROOT, cfg, _q(qs, "paper_id"))}
@@ -232,11 +343,46 @@ def handle_get(route: str, qs: dict) -> tuple[int, dict]:
         project_id = _q(qs, "project", "")
         return 200, config_model.load_overlay(ROOT, project_id)
 
-    # /api/projects/<id>/config|export
+    # /api/projects/<id>/config|export|export_results
     if len(parts) == 4 and parts[0] == "api" and parts[1] == "projects":
         project_id, action = parts[2], parts[3]
         if action == "export":
             return 200, config_model.export_project(ROOT, project_id)
+        if action == "export_results":
+            include_rejected = _parse_bool_qs(_q(qs, "include_rejected"), default=True)
+            paper_id = _q(qs, "paper_id")
+            try:
+                cfg = _project_cfg(project_id)
+            except ValueError as exc:
+                return 404, {"error": str(exc)}
+            if paper_id:
+                res = latest_result(project_id, paper_id)
+                if res is None:
+                    return 404, {"error": "暂无运行结果"}
+                return 200, {
+                    "project_id": project_id,
+                    "paper_id": paper_id,
+                    "run_info": res["run_info"],
+                    "result": pipeline.filter_result_by_status(
+                        res["result"], include_rejected=include_rejected
+                    ),
+                    "warnings": res["warnings"],
+                }
+            papers = pipeline.list_papers(ROOT, cfg)
+            items = []
+            for pid in papers:
+                res = latest_result(project_id, pid)
+                if res is None:
+                    continue
+                items.append({
+                    "paper_id": pid,
+                    "run_info": res["run_info"],
+                    "result": pipeline.filter_result_by_status(
+                        res["result"], include_rejected=include_rejected
+                    ),
+                    "warnings": res["warnings"],
+                })
+            return 200, {"project_id": project_id, "results": items}
         if action == "config":
             return 200, config_model.load_overlay(ROOT, project_id)
 
@@ -368,6 +514,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_bytes(self, data: bytes, content_type: str, status=200):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def _send_static(self, path: Path):
         if not path.exists() or not path.is_file():
             self._send_json({"error": "not found", "path": str(path)}, 404)
@@ -439,6 +592,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if route.startswith("/api/"):
                 status, data = handle_get(route, qs)
+                if isinstance(data, BinaryBody):
+                    return self._send_bytes(data.data, data.content_type, status)
                 return self._send_json(data, status)
             rel = route.lstrip("/") or "index.html"
             return self._send_static(APP_DIR / rel)

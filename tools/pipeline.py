@@ -401,6 +401,31 @@ def get_paper_text(root: Path, project_cfg: dict, paper_id: str) -> str | None:
     return p.read_text(encoding="utf-8", errors="replace") if p.exists() else None
 
 
+def filter_result_by_status(result: dict, include_rejected: bool = True) -> dict:
+    """Return a deep copy of result; drop rejected_by_rule props/figures when include_rejected is False."""
+    out = copy.deepcopy(result)
+    if include_rejected:
+        return out
+    for cond in out.get("conditions") or []:
+        if not isinstance(cond, dict):
+            continue
+        for key, val in list(cond.items()):
+            if not key.endswith("_properties") or not isinstance(val, dict):
+                continue
+            cond[key] = {
+                k: v
+                for k, v in val.items()
+                if not (isinstance(v, dict) and v.get("status") == "rejected_by_rule")
+            }
+    figures = out.get("figures")
+    if isinstance(figures, list):
+        out["figures"] = [
+            f for f in figures
+            if not (isinstance(f, dict) and f.get("status") == "rejected_by_rule")
+        ]
+    return out
+
+
 def list_runs(root: Path, project_cfg: dict, paper_id: str | None = None) -> list:
     base = Path(root) / project_cfg.get("test_runs", "")
     if not base.exists():
