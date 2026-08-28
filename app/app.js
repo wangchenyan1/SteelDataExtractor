@@ -329,6 +329,15 @@
     if (kind) el.classList.add(kind);
   }
 
+  function setConfigStatus(text, kind) {
+    const el = $("configStatus");
+    if (!el) return;
+    el.textContent = text;
+    el.hidden = !text;
+    el.classList.remove("running", "failed", "done");
+    if (kind) el.classList.add(kind);
+  }
+
   function renderStepList() {
     const ol = $("stepList");
     const steps = visibleRunSteps(state.project.steps || []);
@@ -488,7 +497,7 @@
 
   async function onLibraryCheckChange(fieldId, checked) {
     if (!state.overlay) {
-      $("runStatus").textContent = "无覆盖层，无法勾选保存。";
+      setConfigStatus("无覆盖层，无法勾选保存。", "failed");
       return;
     }
     // 与 UI 勾选同源（selectedFieldIds 可能回退到 project.fields），避免空数组覆盖层把项目字段清空
@@ -523,8 +532,7 @@
     if (checked && isProperty && state.overlay.steps && state.overlay.steps.length) {
       renderFieldLibraryChecks();
       renderStageEditor();
-      $("runStatus").textContent =
-        "已勾选性能字段，请挂到阶段后点击「保存配置」。";
+      setConfigStatus("已勾选性能字段，请挂到阶段后点击「保存配置」。", "running");
       return;
     }
 
@@ -533,7 +541,7 @@
       logChange(`${checked ? "勾选" : "取消"}字段 ${fieldId}`);
       await refreshProjectConfig();
     } catch (e) {
-      $("runStatus").textContent = "保存字段勾选失败：" + e.message;
+      setConfigStatus("保存字段勾选失败：" + e.message, "failed");
     }
   }
 
@@ -825,14 +833,16 @@
 
   async function saveConfigView() {
     if (!state.overlay) {
-      $("runStatus").textContent = "无覆盖层，无法保存配置。";
+      setConfigStatus("无覆盖层，无法保存配置。", "failed");
       return;
     }
     const steps = buildStepsFromEditor();
     const empty = steps.filter((s) => s.type === "property" && !(s.fields || []).length);
     if (empty.length) {
-      $("runStatus").textContent =
-        "性能阶段不能为空：" + empty.map((s) => s.name || s.id).join(", ");
+      setConfigStatus(
+        "性能阶段不能为空：" + empty.map((s) => s.name || s.id).join(", "),
+        "failed"
+      );
       return;
     }
     const unassigned = propertyIdsSelected().filter(
@@ -840,7 +850,7 @@
         !steps.some((s) => s.type === "property" && (s.fields || []).includes(id))
     );
     if (unassigned.length) {
-      $("runStatus").textContent = "未挂阶段的性能字段：" + unassigned.join(", ");
+      setConfigStatus("未挂阶段的性能字段：" + unassigned.join(", "), "failed");
       return;
     }
     state.overlay.steps = steps;
@@ -850,10 +860,10 @@
     try {
       await saveOverlay(state.overlay);
       logChange("保存配置（字段 / 阶段 / 策略）");
-      $("runStatus").textContent = "配置已保存。需重新抽取后结果才按新配置。";
+      setConfigStatus("配置已保存。需重新抽取后结果才按新配置。", "done");
       await refreshProjectConfig();
     } catch (e) {
-      $("runStatus").textContent = "保存配置失败：" + e.message;
+      setConfigStatus("保存配置失败：" + e.message, "failed");
     }
   }
 

@@ -104,3 +104,32 @@ cd /internfs/wangchenyan/shougang/steel_extract_tool_workspace && python3 -m pyt
 ## Git
 
 `git rev-parse --is-inside-work-tree` → **not a git repository**。按 instructions 跳过 commit。
+
+---
+
+## Final UX Review Fix (2026-08-28): Config 视图保存反馈不可见
+
+### Finding (Important)
+
+Config 视图「保存配置」将成功/校验错误写入 `#runStatus`（位于 `data-view-panel="papers"`），Config 视图下用户看不到反馈。
+
+### Fix
+
+| 文件 | 变更 |
+| --- | --- |
+| `app/index.html` | 字段配置面板新增 `#configStatus`（`run-status config-status`） |
+| `app/app.js` | 新增 `setConfigStatus()`；`saveConfigView` / `onLibraryCheckChange` 改写 config 状态，不再写 `#runStatus` |
+| `app/styles.css` | `.config-status` 间距 |
+| `tests/test_workbench_config_status.py` | 断言 HTML 含 `#configStatus` 且 `saveConfigView` 使用 `setConfigStatus` |
+
+成功文案：「配置已保存。需重新抽取后结果才按新配置。」；空阶段 / 未挂字段等校验错误带 `failed` 样式显示于 Config 面板。
+
+### Tests
+
+```text
+45 passed in 2.46s
+```
+
+### Commit
+
+`fix: show config save status in config view panel`
