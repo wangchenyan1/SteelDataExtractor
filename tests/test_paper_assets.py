@@ -20,3 +20,29 @@ def test_paper_image_rejects_traversal():
     from tools.workbench_server import resolve_paper_image_path
     assert resolve_paper_image_path(
         wb.ROOT, "demo_steel", "demo_steel_2024", "../evil.png") is None
+
+
+def test_paper_image_rejects_bad_paper_id():
+    from tools.workbench_server import resolve_paper_image_path
+    assert resolve_paper_image_path(
+        wb.ROOT, "demo_steel", "..", "fig1_om.png") is None
+    assert resolve_paper_image_path(
+        wb.ROOT, "demo_steel", "../x", "fig1_om.png") is None
+
+
+def test_paper_meta_rejects_bad_paper_id():
+    code, _ = wb.handle_get("/api/paper_meta", {
+        "project": ["demo_steel"], "paper_id": [".."]})
+    assert code == 404
+    code, _ = wb.handle_get("/api/paper_meta", {
+        "project": ["demo_steel"], "paper_id": ["../x"]})
+    assert code == 404
+
+
+def test_paper_pdf_rejects_bad_paper_id():
+    code, _ = wb.handle_get("/api/paper_pdf", {
+        "project": ["demo_steel"], "paper_id": [".."]})
+    assert code == 404
+    code, _ = wb.handle_get("/api/paper_pdf", {
+        "project": ["demo_steel"], "paper_id": ["../x"]})
+    assert code == 404

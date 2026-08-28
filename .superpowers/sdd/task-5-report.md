@@ -1,43 +1,53 @@
-# Task 5 Report: 分阶段 run_step 与骨架失效
+# Task 5 Report: HTTP — PDF / 图片 / paper_meta / 结果导出
 
-## RED
+**Status:** PASS  
+**Branch:** `feat/extract-workbench-ux`  
+**Commit:** `1764d96` — `feat: serve paper PDF/images and export results with status filter`
 
-Created `tests/test_run_step.py`（三契约：property 先于 entity 报错；分阶段 entity→mechanical 带出处；重跑 entity 失效并自动下游）.
+## Summary
 
-```
-$ python3 -m pytest tests/test_run_step.py -v
-ERROR collecting tests/test_run_step.py
-ImportError: cannot import name 'run_step' from 'tools.pipeline'
-```
+- 新增 `GET /api/paper_meta`、`/api/paper_pdf`、`/api/paper_image`；`resolve_paper_image_path` 仅允许 `images_from_md/` 下 basename，拒绝路径穿越。
+- `do_GET` 支持 `BinaryBody`（PDF/图片按 content-type 返回字节；其它 API 仍 JSON）。
+- `pipeline.filter_result_by_status`：`include_rejected=False` 时剥离 `*_properties` 与 `figures` 中 `rejected_by_rule`。
+- `GET /api/projects/:id/export_results`：有 `paper_id` 返回单篇最新结果，否则项目内各篇最新结果列表；支持 `include_rejected`。
 
-## GREEN
+## Tests
 
-Changed:
+```text
+# RED
+python3 -m pytest tests/test_paper_assets.py tests/test_export_results.py -v
+# collection ImportError (filter_result_by_status) + paper_assets 3 failed
 
-- `tools/pipeline.py`：抽出 `_prepare_run` / `_execute_step`；`run_extraction` 循环全部步骤；新增 `run_step`（骨架未完成 → `RuntimeError("必须先完成骨架")`；重跑 entity 删除 `properties/*`、清空性能组与过滤 figures，再自动跑全部下游）；`RUN_INFO.json` 增加 `template_id` / `completed_steps` / `invalidated_steps` / `parse_skipped`
-- `tools/llm_backends.py`：mock 非标识 entity 字段包成 `{value,unit,excerpt,location}`；性能值补真实 demo 摘录（C1 yield → Table 2；C4 reject → Abstract）
-
-```
-$ python3 -m pytest tests/test_run_step.py tests/test_validate_provenance.py -v
-5 passed
-
-$ python3 -m pytest tests -q
-21 passed
+# GREEN
+python3 -m pytest tests/test_paper_assets.py tests/test_export_results.py tests/test_export.py -v
+# 5 passed
 ```
 
-## --run-once
+## Files touched
 
+- `tools/workbench_server.py` — BinaryBody、资源 resolve、新路由、do_GET 分支
+- `tools/pipeline.py` — `filter_result_by_status`
+- `tests/test_paper_assets.py` — 新建
+- `tests/test_export_results.py` — 新建
+
+## Concerns
+
+1. demo 样例无 `source.pdf`，`has_pdf=False`，`/api/paper_pdf` 对 demo 为 404（符合接口语义）。
+2. `export_results` 缺省 `include_rejected=true`（不剥离）；前端需显式传 `false` 才得到「仅 accepted」。
+3. 过滤仅处理 `conditions[*].*_properties` 与顶层 `figures`；其它嵌套结构未覆盖。
+
+## Review fix — paper_id sandbox (Important)
+
+**Finding:** `paper_id` 未限制在 `parsed_results/<paper_id>` 内，`..` / `../x` 可逃逸 `parsed_results`。
+
+**Fix:**
+- 新增 `_is_safe_paper_id`：拒绝空、`.`、`..` 及含路径分隔符的 `paper_id`（要求 `Path(paper_id).name == paper_id`）。
+- `resolve_paper_image_path` / `resolve_paper_pdf_path` / `paper_meta`：resolve 后校验 `paper_dir`/`images_dir` 位于 `parsed.resolve()` 下。
+- 负向测试：`paper_id=".."` / `"../x"` → image resolve 返回 None；meta/pdf HTTP 404。
+
+**Tests (post-fix):**
+
+```text
+python3 -m pytest tests/test_paper_assets.py tests/test_export_results.py tests/test_export.py -v
+# 8 passed in 0.07s
 ```
-$ python3 tools/workbench_server.py --run-once --project demo_steel --paper-id demo_steel_2024 --mode two_stage
-```
-
-- samples=2, conditions=4, figures=2, warnings=2
-- `completed_steps`: entity, mechanical, magnetic, figures
-- `parse_skipped`: true；C4 yield 剔除 + XRD 过滤仍正常
-
-## Notes
-
-- Skip git（按任务说明）.
-- 未写 Extract_data.
-- 分阶段测试会在 `test_runs/demo_steel/test/` 留下 run 目录（计划允许）.
-- 前端仍可能按 title 字符串渲染；规格 5.5 对象形态交 Task 10 适配.

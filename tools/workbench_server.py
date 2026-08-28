@@ -59,10 +59,19 @@ class BinaryBody:
         self.content_type = content_type
 
 
+def _is_safe_paper_id(paper_id: str) -> bool:
+    """Reject empty, ., .., and paper_id values with path separators."""
+    if not paper_id or paper_id in (".", ".."):
+        return False
+    return Path(paper_id).name == paper_id
+
+
 def resolve_paper_image_path(
     root: Path, project_id: str, paper_id: str, name: str
 ) -> Path | None:
     """Resolve basename under images_from_md/; reject path traversal."""
+    if not _is_safe_paper_id(paper_id):
+        return None
     if not name or Path(name).name != name:
         return None
     try:
@@ -72,7 +81,10 @@ def resolve_paper_image_path(
         parsed = pipeline._resolve_parsed_dir(root, cfg)
         if not parsed:
             return None
+        parsed_root = parsed.resolve()
         images_dir = (parsed / paper_id / "images_from_md").resolve()
+        if not images_dir.is_relative_to(parsed_root):
+            return None
         candidate = (images_dir / name).resolve()
         if not candidate.is_relative_to(images_dir):
             return None
@@ -84,6 +96,8 @@ def resolve_paper_image_path(
 
 
 def resolve_paper_pdf_path(root: Path, project_id: str, paper_id: str) -> Path | None:
+    if not _is_safe_paper_id(paper_id):
+        return None
     try:
         cfg = pipeline.load_workspace_config(root)["projects"].get(project_id)
         if not cfg:
@@ -91,7 +105,10 @@ def resolve_paper_pdf_path(root: Path, project_id: str, paper_id: str) -> Path |
         parsed = pipeline._resolve_parsed_dir(root, cfg)
         if not parsed:
             return None
-        paper_dir = parsed / paper_id
+        parsed_root = parsed.resolve()
+        paper_dir = (parsed / paper_id).resolve()
+        if not paper_dir.is_relative_to(parsed_root):
+            return None
         for fname in ("source.pdf", f"{paper_id}.pdf"):
             p = paper_dir / fname
             if p.is_file():
@@ -102,6 +119,8 @@ def resolve_paper_pdf_path(root: Path, project_id: str, paper_id: str) -> Path |
 
 
 def paper_meta(root: Path, project_id: str, paper_id: str) -> dict | None:
+    if not _is_safe_paper_id(paper_id):
+        return None
     try:
         cfg = pipeline.load_workspace_config(root)["projects"].get(project_id)
         if not cfg:
@@ -109,7 +128,10 @@ def paper_meta(root: Path, project_id: str, paper_id: str) -> dict | None:
         parsed = pipeline._resolve_parsed_dir(root, cfg)
         if not parsed:
             return None
-        paper_dir = parsed / paper_id
+        parsed_root = parsed.resolve()
+        paper_dir = (parsed / paper_id).resolve()
+        if not paper_dir.is_relative_to(parsed_root):
+            return None
         if not paper_dir.is_dir():
             return None
         images_dir = paper_dir / "images_from_md"
