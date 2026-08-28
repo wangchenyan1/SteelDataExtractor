@@ -33,7 +33,7 @@
           <div class="project-list" id="projectList"></div>
         </section>
         <section data-view-panel="papers">
-          <h2>抽取步骤</h2>
+          <h2>运行进度</h2>
           <ol class="steps" id="stepList"></ol>
         </section>
       </aside>
@@ -49,8 +49,9 @@
         <section class="intro" data-view-panel="papers">
           <div class="run-actions" id="runActions">
             <button class="primary" id="btnRunAll">整篇一次跑完</button>
-            <button class="primary" id="btnRunStep">跑当前步骤</button>
+            <button class="primary" id="btnRunStep">跑当前阶段</button>
             <button class="ghost" id="btnParseOnly">只解析</button>
+            <button class="primary" id="btnGoReview" hidden>去复核</button>
             <div class="reextract-row">
               <select id="reextractField" title="重抽字段"></select>
               <select id="reextractScope" title="重抽范围">
@@ -107,7 +108,7 @@
               <select id="extractMode">
                 <option value="two_stage">两阶段：框架 + 性质</option>
                 <option value="entity_only">只抽框架</option>
-                <option value="single_pass">单次抽取</option>
+                <option value="single_pass">单次抽取（高级对照）</option>
               </select>
             </label>
             <label>
@@ -120,6 +121,7 @@
             <button id="usePaperBtn" class="ghost">使用该文献</button>
           </div>
           <pre id="paperRunPreview" class="run-preview"></pre>
+          <div id="runStatus" class="run-status">启动后端后，在此选择文献并按项目阶段运行抽取。</div>
         </section>
 
         <section class="panel review-workbench" data-view-panel="review">
@@ -137,8 +139,6 @@
               </select>
             </label>
           </div>
-          <div id="runStatus" class="run-status">启动后端后，可以在这里运行抽取、查看日志，并把原文与 JSON 结果并排核对。</div>
-
           <div class="review-split">
             <article class="source-pane">
               <div class="pane-title">

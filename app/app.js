@@ -72,6 +72,7 @@
     backendOnline: false,
     selectedStepId: null,
     entityDone: false,
+    completedSteps: [],
     lastRunId: null,
     currentResult: null,
     editingRule: null,
@@ -154,12 +155,14 @@
       await api("/api/health");
       state.backendOnline = true;
       $("apiStatus").textContent = "后端已连接";
-      $("runStatus").textContent = "后端已连接，可整篇跑、分步跑、只解析或只重抽。";
+      setRunStatus("后端已连接，可整篇跑、分阶段跑、只解析或只重抽。");
     } catch (e) {
       state.backendOnline = false;
       $("apiStatus").textContent = "后端未连接（先启动 workbench_server.py）";
-      $("runStatus").textContent =
-        "未检测到后端。请运行：python3 tools/workbench_server.py，然后刷新页面。";
+      setRunStatus(
+        "未检测到后端。请运行：python3 tools/workbench_server.py，然后刷新页面。",
+        "failed"
+      );
     }
   }
 
@@ -207,6 +210,7 @@
     state.project = state.projects[pid];
     state.selectedStepId = null;
     state.entityDone = false;
+    state.completedSteps = [];
     state.lastRunId = null;
     state.currentResult = null;
     state.paperText = "";
@@ -227,12 +231,14 @@
     loadConfigEditor();
     updateRunButtons();
     clearRunOutputs();
+    updateGoReviewButton(false);
     await restoreEntityDoneFromLatestRun();
   }
 
   /** 从最新 run 的 completed_steps（或结果 samples）恢复 entityDone，并刷新步骤条 */
   function applyEntityDoneFromRunInfo(info, result) {
     const completed = (info && info.completed_steps) || [];
+    state.completedSteps = completed;
     const entityIds = (state.project.steps || [])
       .filter((s) => s.type === "entity")
       .map((s) => s.id);
@@ -293,34 +299,54 @@
   }
 
   // ---------------------------------------------------------------- step list
+  function visibleRunSteps(steps) {
+    return (steps || []).filter((s) => s.type !== "figure");
+  }
+
   function stepTypeLabel(t) {
-    return t === "entity" ? "实体·1 次调用"
-      : t === "property" ? "性能·1 次调用"
-      : t === "figure" ? "图片·规则过滤"
+    return t === "entity" ? "骨架"
+      : t === "property" ? "性能"
       : t || "";
+  }
+
+  function updateGoReviewButton(show) {
+    const btn = $("btnGoReview");
+    if (!btn) return;
+    btn.hidden = !show;
+    btn.disabled = !show;
+  }
+
+  function setRunStatus(text, kind) {
+    const el = $("runStatus");
+    if (!el) return;
+    el.textContent = text;
+    el.classList.remove("running", "failed", "done");
+    if (kind) el.classList.add(kind);
   }
 
   function renderStepList() {
     const ol = $("stepList");
-    const steps = state.project.steps || [];
+    const steps = visibleRunSteps(state.project.steps || []);
     if (!steps.length) {
-      ol.innerHTML = "<li>（未配置 steps，使用默认：实体 → 性能 → 图片）</li>";
+      ol.innerHTML = "<li>（未配置阶段，使用默认：骨架 → 性能）</li>";
       return;
     }
-    if (!state.selectedStepId) {
+    if (!state.selectedStepId || !steps.some((s) => s.id === state.selectedStepId)) {
       state.selectedStepId = steps[0].id;
     }
     ol.innerHTML = "";
     steps.forEach((s) => {
       const li = document.createElement("li");
-      const needsEntity = s.type === "property" || s.type === "figure";
+      const needsEntity = s.type === "property";
       const disabled = needsEntity && !state.entityDone;
+      const done = (state.completedSteps || []).includes(s.id);
       li.className =
         (s.id === state.selectedStepId ? "active " : "") +
-        (disabled ? "disabled" : "");
+        (disabled ? "disabled " : "") +
+        (done ? "done" : "");
       li.setAttribute("data-step-id", s.id);
       li.innerHTML =
-        `${esc(s.name || s.id)}` +
+        `${esc(s.name || s.id)}${done ? " ✓" : ""}` +
         `<span class="step-type">${esc(stepTypeLabel(s.type))}</span>`;
       if (!disabled) {
         li.addEventListener("click", () => {
@@ -1244,7 +1270,13 @@
       return;
     }
     setBusy(true);
-    $("runStatus").textContent = `正在整篇运行（${$("extractMode").value}）...`;
+    const stagePlan = visibleRunSteps(p.steps)
+      .map((s) => s.name || s.id)
+      .join(" → ");
+    setRunStatus(
+      `正在整篇运行（${$("extractMode").value}）${stagePlan ? "：" + stagePlan : ""}...`,
+      "running"
+    );
     try {
       const body = {
         ...commonRunBody(),
@@ -1258,13 +1290,15 @@
         body: JSON.stringify(body),
       });
       afterRun(out);
-      $("runStatus").textContent =
-        `完成：${out.run_id}（样品 ${out.result.samples ? out.result.samples.length : 0} · ` +
-        `状态 ${out.result.conditions ? out.result.conditions.length : 0} · ` +
-        `图片保留 ${(out.figures || []).length} · 规则命中 ${(out.warnings || []).length}）`;
+      const r = out.result || {};
+      setRunStatus(
+        `完成：${out.run_id}（样品 ${(r.samples || []).length} · ` +
+          `状态 ${(r.conditions || []).length} · 性能值 ${countProps(r)}）`,
+        "done"
+      );
       await refreshRuns();
     } catch (e) {
-      $("runStatus").textContent = "运行失败：" + e.message;
+      setRunStatus("运行失败：" + e.message, "failed");
     } finally {
       setBusy(false);
     }
@@ -1280,19 +1314,20 @@
     }
     const stepId = state.selectedStepId;
     if (!stepId) {
-      $("runStatus").textContent = "请先在左侧步骤条选择一步。";
+      setRunStatus("请先在左侧进度条选择一个阶段。");
       return;
     }
     const step = (p.steps || []).find((s) => s.id === stepId);
-    if (step && (step.type === "property" || step.type === "figure") && !state.entityDone) {
-      $("runStatus").textContent = "骨架未完成，无法跑性能/图片步骤。";
+    if (step && step.type === "property" && !state.entityDone) {
+      setRunStatus("骨架未完成，无法跑性能阶段。");
       return;
     }
     if (step && step.type === "entity" && state.entityDone) {
-      if (!confirm("下游性质和图片将作废并重跑")) return;
+      if (!confirm("下游性能阶段将作废并重跑")) return;
     }
+    const stepName = step ? step.name || step.id : stepId;
     setBusy(true);
-    $("runStatus").textContent = `正在跑步骤 ${stepId}...`;
+    setRunStatus(`正在跑阶段「${stepName}」...`, "running");
     try {
       const out = await api("/api/run_step", {
         method: "POST",
@@ -1305,11 +1340,13 @@
       });
       afterRun(out);
       const inv = (out.invalidated || []).join(", ") || "无";
-      $("runStatus").textContent =
-        `步骤完成：${stepId}（run ${out.run_id}，作废下游：${inv}）`;
+      setRunStatus(
+        `阶段「${stepName}」完成（run ${out.run_id}，作废下游：${inv}）`,
+        "done"
+      );
       await refreshRuns();
     } catch (e) {
-      $("runStatus").textContent = "分步运行失败：" + e.message;
+      setRunStatus("分阶段运行失败：" + e.message, "failed");
     } finally {
       setBusy(false);
     }
@@ -1405,6 +1442,7 @@
     }
     renderStepList();
     renderRun(out);
+    updateGoReviewButton(true);
   }
 
   function renderRun(out) {
@@ -1481,7 +1519,7 @@
     }
     box.innerHTML = warnings
       .map((w) => {
-        const tag = w.type === "figure_dropped" ? "图片过滤" : "性能来源剔除";
+        const tag = w.type === "figure_dropped" ? "图片策略" : "性能来源剔除";
         return `<div class="review-item warn"><span class="review-tag">${esc(tag)}</span> ${esc(w.detail || w.message || JSON.stringify(w))}</div>`;
       })
       .join("");
@@ -1873,6 +1911,10 @@
     $("btnRunStep").addEventListener("click", runStep);
     $("btnParseOnly").addEventListener("click", parseOnly);
     $("btnReextract").addEventListener("click", reextract);
+    $("btnGoReview").onclick = () => {
+      setView("review");
+      loadReview();
+    };
     $("btnExport").addEventListener("click", exportProject);
     $("btnSaveConfig").addEventListener("click", saveConfigView);
     $("btnAddStage").addEventListener("click", addPropertyStage);
