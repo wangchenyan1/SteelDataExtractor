@@ -1,6 +1,6 @@
 {
   "project_id": "demo_steel",
-  "name": "示例：不锈钢文献（离线可跑）",
+  "name": "示例：不锈钢文献",
   "description": "把复杂文献抽取拆成：Stage1 建样品-状态骨架 → Stage2 基于 condition 补性能 → 图片单独分类 → 规则校验。改动本文件的 fields / rules 即可适配到你自己的领域。",
   "composition_unit_default": "wt.%",
   "fields": {

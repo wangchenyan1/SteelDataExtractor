@@ -33,27 +33,25 @@ PDF（可选，需 UNIPARSER_API_KEY）
 性能阶段可在配置页自定义（如「骨架 → 力学性能 → 电导性能」），不再写死为力学 / 磁学 / 图片过滤四步。
 规则未通过的性能值与图片**保留在结果树中**，标记为 `status=rejected_by_rule` 并显示原因；导出时可选择是否包含。
 
-离线 `demo_steel` **不调用 UniParser**，直接用内置 `paper.md`。
+已有 `paper.md` 的文献默认不再调用 UniParser。
 
-## 30 秒离线体验（无需 API key / 无需联网）
+## 启动工作台
 
-内置示例项目 `demo_steel` 用离线 mock 后端，开箱即可端到端跑通：
+抽取走真实多模态后端。在工作区根目录放 `.env`，至少配置 `LLM_API_KEY` 或 `GPUGEEK_API_KEY`；解析 PDF 另需 `UNIPARSER_API_KEY`。
 
 ```bash
 cd /internfs/wangchenyan/shougang/steel_extract_tool_workspace
 
 # 方式一：命令行试跑一篇
 python3 tools/workbench_server.py --run-once --project demo_steel \
-  --paper-id demo_steel_2024 --mode two_stage
+  --paper-id 10.1007_s11665-019-04233-6 --mode two_stage
 
 # 方式二：启动网页工作台
 python3 tools/workbench_server.py --host 127.0.0.1 --port 8787
 # 浏览器打开 http://127.0.0.1:8787 （远程可用 ssh -L 8787:127.0.0.1:8787 dp_cpu）
 ```
 
-示例里故意埋了一个坑：摘要里的目标值「yield strength above 600 MPa」会被性能步
-误当成测量值，**规则校验会将其标记为未通过**（仍出现在复核结果树中，异色展示）；XRD 图同理被图片策略标记为未通过。用 `--mode single_pass`
-可以看到「不做策略标记」的对照结果（全部视为通过），直观对比优化前后。
+规则校验会把摘要目标值、权利要求范围等非实测来源标为未通过（仍出现在复核结果树中，异色展示）；不符合图片策略的图同理。`--mode single_pass` 不做这些策略标记，便于对照。
 
 ## 四个入口
 
@@ -90,7 +88,7 @@ steel_extract_tool_workspace/
   tools/
     workbench_server.py   # 静态服务 + CLI/API
     pipeline.py           # 配置驱动抽取 pipeline
-    llm_backends.py       # mock（离线）/ claude（真实）
+    llm_backends.py       # claude（真实多模态）
     paper_parser.py       # paper.md 解析（文本 + 图片）
     pdf_parser.py         # UniParser PDF → paper.md（需 API key）
   configs/
@@ -99,7 +97,7 @@ steel_extract_tool_workspace/
     field_library/        # 钢铁公共字段库
     projects/             # 项目覆盖层（demo_steel）
     fields/               # 旧项目兼容配置
-  example_data/           # 内置示例文献（demo 离线用）
+  example_data/           # 已解析文献（paper.md + 图片）
   test_runs/              # 试跑结果
   docs/
 ```
@@ -108,7 +106,7 @@ steel_extract_tool_workspace/
 
 1. 钢铁子集：新建项目选 `steel` 模板，从库勾选需要的字段并配置阶段即可。
 2. 其它领域：用 `blank` 模板建项目，自建私有字段（第一版不提供第二套完整骨架示例）。
-3. 真实抽取：`backend: "claude"`，工作区 `.env` 配 `LLM_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL`。
+3. 抽取：项目 `backend: "claude"`，工作区 `.env` 配 `LLM_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL`。
 4. PDF 解析：另需 `UNIPARSER_API_KEY`（或 `UP_API_KEY`）；无 key 时会报错提示该变量名。已有 `paper.md` 默认不重复解析。
 
 ## 运行结果落盘

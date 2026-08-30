@@ -188,6 +188,17 @@
       "note": ""
     },
     {
+      "id": "hardness",
+      "label": "硬度",
+      "category": "property",
+      "group": "mechanical_properties",
+      "value_type": "number_with_unit",
+      "rule": "只抽原文实测硬度值，单位跟原文（HV/HRC/HB 等）。",
+      "positive_examples": "HV 320; HRC 45",
+      "negative_examples": "不要把目标硬度或估读值当实测",
+      "note": ""
+    },
+    {
       "id": "permeability",
       "label": "磁导率",
       "category": "property",
@@ -197,6 +208,28 @@
       "positive_examples": "1.01 (relative)",
       "negative_examples": "不要与力学性能混在一次调用里抽",
       "note": "这是一个独立的抽取步骤（Stage2b），和力学性能分开调用。"
+    },
+    {
+      "id": "electrical_conductivity",
+      "label": "电导率",
+      "category": "property",
+      "group": "electrical_properties",
+      "value_type": "number_with_unit",
+      "rule": "只抽原文实测电导率，单位跟原文（如 %IACS、MS/m）。",
+      "positive_examples": "45 %IACS; 25 MS/m",
+      "negative_examples": "不要把电阻率误填为电导率，也不要估读曲线",
+      "note": ""
+    },
+    {
+      "id": "impact_toughness",
+      "label": "冲击韧性",
+      "category": "property",
+      "group": "impact_properties",
+      "value_type": "number_with_unit",
+      "rule": "只抽原文实测冲击韧性（如 Charpy），单位跟原文；不要与 KIC/JIC 断裂韧性混淆。",
+      "positive_examples": "120 J; 85 J/cm2",
+      "negative_examples": "不要把 KIC/JIC 或目标冲击值当实测冲击韧性",
+      "note": ""
     },
     {
       "id": "figure_id",

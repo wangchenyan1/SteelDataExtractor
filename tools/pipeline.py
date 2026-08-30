@@ -8,7 +8,7 @@
 - 字段和规则来自 configs/fields/<project>.json，改配置即可换领域；
 - Stage2 只允许给 Stage1 已有的 condition 补性能，不新增样品/状态；
 - 性能值按来源白/黑名单做规则校验，剔除「摘要目标/权利要求范围」等非实测来源；
-- 图片按类型白名单过滤，剔除 XRD/衍射/示意图等非组织图；
+- 图片按 is_microstructure_image / is_post_test_image 过滤，剔除非组织图与断后图；
 - 每一阶段落一个中间产物，便于反查。
 
 mode:
@@ -24,6 +24,7 @@ import json
 import os
 import sys
 from datetime import datetime
+import re
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -35,9 +36,10 @@ from config_model import (  # noqa: E402
     load_field_library,
     load_template,
 )
-from input_trim import trim_input  # noqa: E402
+from input_trim import prepare_model_text, normalize_document_kind  # noqa: E402
 from llm_backends import get_backend  # noqa: E402
 from paper_parser import parse_paper_md  # noqa: E402
+from patent_extract_rules import PATENT_STAGE1_RULES, PATENT_STAGE2_RULES  # noqa: E402
 from provenance import is_identity_field  # noqa: E402
 
 
@@ -82,6 +84,7 @@ def load_field_config(root: Path, project_cfg: dict) -> dict:
                 "figure_filter": overlay.get("figure_filter", {}),
                 "template_id": template_id,
                 "domain_hint": template.get("domain_hint") or "材料文献",
+                "document_kind": normalize_document_kind(overlay.get("document_kind")),
             }
     rel = project_cfg.get("field_config")
     if not rel:
@@ -90,6 +93,16 @@ def load_field_config(root: Path, project_cfg: dict) -> dict:
     if not path.exists():
         return {"fields": {}, "rules": {}, "property_source": {}, "figure_filter": {}}
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def project_document_kind(root: Path, project_cfg: dict) -> str:
+    overlay_rel = project_cfg.get("overlay")
+    value = None
+    if overlay_rel:
+        overlay_path = Path(root) / overlay_rel
+        if overlay_path.exists():
+            value = json.loads(overlay_path.read_text(encoding="utf-8")).get("document_kind")
+    return normalize_document_kind(value)
 
 
 # ---------------------------------------------------------------------------
@@ -110,52 +123,261 @@ def _fmt_rules(rules: dict, keys: list) -> str:
     return "\n".join(lines) if lines else "(该配置未定义专门规则)"
 
 
+_ENTITY_IDENTITY_IDS = frozenset({
+    "sample_id", "condition_id", "figure_id", "placeholder_index",
+})
+
+# 论文/专利通用：每个状态必须挂到样品（专利另有更细规则）
+CONDITION_SAMPLE_BINDING_RULES = """
+## 样品-状态绑定（必须严格遵守）
+- 每个 condition 必须带 sample_id，且必须指向本 JSON samples 中已存在的样品 id（如 S1、S2）。
+- 禁止 condition 的 sample_id 留空；禁止指向不存在的样品。
+- 若全文只有一个样品，所有 condition 的 sample_id 都填该样品。
+- 多样品时按原文归属填写；不确定时优先拆分样品，也不要留空 sample_id。
+""".strip()
+
+_DEFAULT_CONDITION_SAMPLE_ID_RULE = {
+    "rule": "该状态归属的样品 id，必须指向本 JSON 已有 sample；禁止留空。",
+    "positive_examples": "C1/C2/C3 -> S1; C4 -> S2",
+    "negative_examples": "不要留空；不要指向不存在的样品；不要只建 condition 不填 sample_id",
+}
+
+_BIND_WARNING_TYPES = frozenset({
+    "condition_sample_id_filled",
+    "condition_sample_id_fixed",
+    "condition_missing_sample_id",
+    "condition_invalid_sample_id",
+})
+
+
+def _entity_field_slot(field_id: str):
+    """标识字段用裸字符串；其余非标识字段必须带出处。"""
+    if field_id in _ENTITY_IDENTITY_IDS:
+        return "..."
+    return {"value": "...", "unit": "", "excerpt": "...", "location": "..."}
+
+
+def _condition_schema_fields(fields: dict) -> dict:
+    """conditions 必须带 sample_id（挂到样品），即使它不在 condition 类字段里。"""
+    cond_obj = {"sample_id": _entity_field_slot("sample_id")}
+    for fid in fields.get("condition") or []:
+        if fid == "sample_id":
+            continue
+        cond_obj[fid] = _entity_field_slot(fid)
+    if "condition_id" not in cond_obj:
+        cond_obj["condition_id"] = _entity_field_slot("condition_id")
+    return cond_obj
+
+
 def build_entity_prompt(field_config: dict, text: str) -> str:
     fields = field_config.get("fields", {})
-    rules = field_config.get("rules", {})
+    rules = dict(field_config.get("rules") or {})
     domain_hint = field_config.get("domain_hint") or "材料文献"
     rule_keys = [f"sample.{f}" for f in fields.get("sample", [])] + \
                 [f"condition.{f}" for f in fields.get("condition", [])]
+    # sample_id 在字段库常属 sample 类，这里强制注入 condition.sample_id 规则
+    if "condition.sample_id" not in rule_keys:
+        rule_keys.append("condition.sample_id")
+    rules.setdefault("condition.sample_id", _DEFAULT_CONDITION_SAMPLE_ID_RULE)
     schema = {
-        "paper_metadata": {f: "..." for f in fields.get("metadata", [])},
-        "samples": [{f: "..." for f in fields.get("sample", [])}],
-        "conditions": [{f: "..." for f in fields.get("condition", [])}],
-        "figures": [{f: "..." for f in fields.get("figure", [])}],
+        "paper_metadata": {f: _entity_field_slot(f) for f in fields.get("metadata", [])},
+        "samples": [{f: _entity_field_slot(f) for f in fields.get("sample", [])}],
+        "conditions": [_condition_schema_fields(fields)],
+        "figures": [{f: _entity_field_slot(f) for f in fields.get("figure", [])}],
     }
+    extra = "\n" + CONDITION_SAMPLE_BINDING_RULES + "\n"
+    if normalize_document_kind(field_config.get("document_kind")) == "patent":
+        extra += "\n" + PATENT_STAGE1_RULES.strip() + "\n"
     return f"""[Stage 1 · 样品-状态骨架]
 你是{domain_hint}结构化抽取专家。本阶段只建立样品与状态的索引，不抽具体性能数值。
+每个非标识字段必须是 {{value, unit, excerpt, location}} 对象：excerpt 为原文原句（可高亮），location 为章节/表号；标识字段（sample_id / condition_id / figure_id / placeholder_index）保持字符串。
+每个 condition 必须填写 sample_id，指向已有样品。
 严格输出如下 JSON（不要 markdown 代码块，第一个字符是 {{）：
 
 {json.dumps(schema, ensure_ascii=False, indent=2)}
 
 ## 抽取规则
 {_fmt_rules(rules, rule_keys)}
-
+{extra}
 ## 论文正文（已剪裁）
 {text}
 """
 
 
-def build_property_prompt(field_config: dict, step: dict, condition_ids: list) -> str:
+def normalize_entity_provenance(entity: dict) -> dict:
+    """把骨架里裸字符串包成出处对象；已有对象补齐缺省键。不伪造 excerpt。
+
+    figures 保持原样（分类依赖 figure_type 等裸字段）。
+    """
+    def wrap(field_id: str, raw):
+        if field_id in _ENTITY_IDENTITY_IDS:
+            if isinstance(raw, dict) and "value" in raw:
+                return raw.get("value")
+            return raw
+        if raw is None:
+            return {"value": "", "unit": "", "excerpt": "", "location": ""}
+        if isinstance(raw, dict) and ("value" in raw or "excerpt" in raw or "location" in raw):
+            out = {
+                "value": raw.get("value", ""),
+                "unit": raw.get("unit", "") or "",
+                "excerpt": raw.get("excerpt", "") or "",
+                "location": raw.get("location", "") or "",
+            }
+            if raw.get("status"):
+                out["status"] = raw["status"]
+            if raw.get("reject_reason"):
+                out["reject_reason"] = raw["reject_reason"]
+            return out
+        return {"value": raw, "unit": "", "excerpt": "", "location": ""}
+
+    return {
+        "paper_metadata": {
+            k: wrap(k, v) for k, v in (entity.get("paper_metadata") or {}).items()
+        },
+        "samples": [
+            {k: wrap(k, v) for k, v in (s or {}).items()}
+            for s in (entity.get("samples") or [])
+        ],
+        "conditions": [
+            {k: wrap(k, v) for k, v in (c or {}).items()}
+            for c in (entity.get("conditions") or [])
+        ],
+        "figures": list(entity.get("figures") or []),
+    }
+
+
+def _fact_text(value) -> str:
+    if isinstance(value, dict):
+        return str(value.get("value") or "")
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _identity_text(raw) -> str:
+    if isinstance(raw, dict):
+        return str(raw.get("value") or "").strip()
+    if raw is None:
+        return ""
+    return str(raw).strip()
+
+
+def bind_condition_sample_ids(entity: dict) -> tuple[dict, list]:
+    """确保每个 condition 尽量挂到已有 sample；单样品可自动补全。
+
+    返回 (entity, warnings)。会原地修改 entity 内的 conditions/samples。
+    """
+    entity = entity if isinstance(entity, dict) else {}
+    samples = entity.get("samples") if isinstance(entity.get("samples"), list) else []
+    conditions = entity.get("conditions") if isinstance(entity.get("conditions"), list) else []
+    warnings: list = []
+
+    known: list[str] = []
+    for i, sample in enumerate(samples):
+        if not isinstance(sample, dict):
+            continue
+        sid = _identity_text(sample.get("sample_id"))
+        if not sid:
+            sid = f"S{i + 1}"
+            sample["sample_id"] = sid
+        known.append(sid)
+    known_set = set(known)
+
+    for cond in conditions:
+        if not isinstance(cond, dict):
+            continue
+        cid = _identity_text(cond.get("condition_id")) or "?"
+        sid = _identity_text(cond.get("sample_id"))
+        if not sid:
+            if len(known) == 1:
+                cond["sample_id"] = known[0]
+                warnings.append({
+                    "type": "condition_sample_id_filled",
+                    "detail": f"{cid} 缺少 sample_id，已自动挂到唯一样品 {known[0]}",
+                    "condition_id": cid,
+                    "sample_id": known[0],
+                })
+            else:
+                warnings.append({
+                    "type": "condition_missing_sample_id",
+                    "detail": f"{cid} 缺少 sample_id，无法挂到样品",
+                    "condition_id": cid,
+                })
+            continue
+        if sid not in known_set:
+            if len(known) == 1:
+                cond["sample_id"] = known[0]
+                warnings.append({
+                    "type": "condition_sample_id_fixed",
+                    "detail": f"{cid} 的 sample_id={sid} 无效，已改挂到唯一样品 {known[0]}",
+                    "condition_id": cid,
+                    "sample_id": known[0],
+                })
+            else:
+                warnings.append({
+                    "type": "condition_invalid_sample_id",
+                    "detail": f"{cid} 的 sample_id={sid} 不在 samples 中",
+                    "condition_id": cid,
+                    "sample_id": sid,
+                })
+    return entity, warnings
+
+
+def normalize_condition_skeleton(rows) -> list[dict]:
+    """Accept ['C1'] or [{condition_id, sample_id, condition_name}]."""
+    if not rows:
+        return [{"condition_id": "C1", "sample_id": "", "condition_name": ""}]
+    out: list[dict] = []
+    for item in rows:
+        if isinstance(item, str):
+            out.append({"condition_id": item, "sample_id": "", "condition_name": ""})
+            continue
+        if not isinstance(item, dict):
+            continue
+        out.append({
+            "condition_id": item.get("condition_id") or "",
+            "sample_id": item.get("sample_id") or "",
+            "condition_name": _fact_text(item.get("condition_name")),
+        })
+    return out or [{"condition_id": "C1", "sample_id": "", "condition_name": ""}]
+
+
+def condition_skeleton_from_entity(entity: dict) -> list[dict]:
+    return normalize_condition_skeleton((entity or {}).get("conditions") or [])
+
+
+def build_property_prompt(field_config: dict, step: dict, condition_ids: list,
+                          text: str) -> str:
     rules = field_config.get("rules", {})
     src = field_config.get("property_source", {})
     step_fields = step.get("fields", [])
     group = step.get("group", "properties")
     rule_keys = [f"property.{f}" for f in step_fields]
-    ids = condition_ids or ["C1", "C2", "..."]
+    skeleton = normalize_condition_skeleton(condition_ids)
+    first = skeleton[0]
     schema = {
         "properties": [
-            {"condition_id": ids[0],
-             **{f: {"value": "...", "unit": "...", "source": "measured_table"} for f in step_fields}}
+            {"condition_id": first.get("condition_id") or "C1",
+             "sample_id": first.get("sample_id") or "S1",
+             **{f: {
+                 "value": "...", "unit": "...", "source": "measured_table",
+                 "excerpt": "...", "location": "...",
+             } for f in step_fields}}
         ]
     }
+    extra = ""
+    if normalize_document_kind(field_config.get("document_kind")) == "patent":
+        extra = "\n" + PATENT_STAGE2_RULES.strip() + "\n"
     return f"""[{step.get('name', '性能步骤')}] 本步只抽【{group}】：{', '.join(step_fields)}
-已给定 condition 列表：{', '.join(ids)}
-只允许给这些已有 condition 补本组性能，禁止新增样品或状态，也不要抽本组以外的字段。
-严格输出如下 JSON：
+只允许给 Stage1 骨架里已有的样品-状态补本组性能，禁止新增样品或状态，也不要抽本组以外的字段。
+每个性能值必须带 excerpt、location、source。
+严格输出如下 JSON（不要 markdown 代码块，第一个字符是 {{）：
 
 {json.dumps(schema, ensure_ascii=False, indent=2)}
 
+## 样品-状态骨架（Stage1 已确定，禁止新增或改 id）
+{json.dumps(skeleton, ensure_ascii=False, indent=2)}
+{extra}
 ## 本组字段规则
 {_fmt_rules(rules, rule_keys)}
 
@@ -163,6 +385,9 @@ def build_property_prompt(field_config: dict, step: dict, condition_ids: list) -
 允许来源: {', '.join(src.get('allow', [])) or '(未配置)'}
 禁止来源: {', '.join(src.get('deny', [])) or '(未配置)'}
 每个性能值必须带 source 字段说明来源。
+
+## 论文正文（已剪裁）
+{text}
 """
 
 
@@ -170,24 +395,31 @@ def build_reextract_property_prompt(field_config: dict, field_id: str,
                                     condition_ids: list, text: str) -> str:
     rules = field_config.get("rules", {})
     src = field_config.get("property_source", {})
-    ids = condition_ids or ["C1", "C2", "..."]
+    skeleton = normalize_condition_skeleton(condition_ids)
+    first = skeleton[0]
     schema = {
         "properties": [
-            {"condition_id": ids[0],
+            {"condition_id": first.get("condition_id") or "C1",
+             "sample_id": first.get("sample_id") or "S1",
              field_id: {
                  "value": "...", "unit": "...", "source": "measured_table",
                  "excerpt": "...", "location": "...",
              }}
         ]
     }
+    extra = ""
+    if normalize_document_kind(field_config.get("document_kind")) == "patent":
+        extra = "\n" + PATENT_STAGE2_RULES.strip() + "\n"
     return f"""[单字段重抽 · {field_id}]
 只抽字段【{field_id}】，每个值必须带 excerpt、location、source。
-已给定 condition 列表：{', '.join(ids)}
-只允许给这些已有 condition 补该字段，禁止新增样品或状态，也不要抽其它字段。
+只允许给 Stage1 骨架里已有的样品-状态补该字段，禁止新增样品或状态，也不要抽其它字段。
 严格输出如下 JSON：
 
 {json.dumps(schema, ensure_ascii=False, indent=2)}
 
+## 样品-状态骨架（Stage1 已确定，禁止新增或改 id）
+{json.dumps(skeleton, ensure_ascii=False, indent=2)}
+{extra}
 ## 字段规则
 {_fmt_rules(rules, [f"property.{field_id}"])}
 
@@ -303,23 +535,106 @@ def validate_properties(properties: list, field_config: dict) -> tuple[list, lis
     return cleaned, warnings
 
 
+def _figure_slot_value(raw):
+    """骨架图字段可能是出处对象；过滤时取裸值。"""
+    if isinstance(raw, dict) and "value" in raw:
+        return raw.get("value")
+    return raw
+
+
+def _figure_bool(raw):
+    val = _figure_slot_value(raw)
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.strip().lower() in ("true", "1", "yes", "y")
+    return val
+
+
+def normalize_figure_type(raw) -> str:
+    """把自由文本类型归到白名单枚举（OM/SEM/TEM/EBSD 等）。
+
+    模型常写 optical micrograph / SEM fracture …，而 figure_filter.keep_types
+    用短码；不做归一会导致真组织图被整批标成「不在白名单」。
+    """
+    val = _figure_slot_value(raw)
+    if val is None:
+        return ""
+    s = str(val).strip()
+    if not s:
+        return ""
+    compact = s.upper().replace(" ", "_").replace("-", "_")
+    exact = {
+        "OM": "OM", "SEM": "SEM", "TEM": "TEM", "EBSD": "EBSD",
+        "XRD": "XRD", "SAED": "SAED", "EDS": "EDS", "EDX": "EDX", "EPMA": "EPMA",
+        "STRESS_STRAIN_CURVE": "stress_strain_curve",
+        "HYSTERESIS_LOOP": "hysteresis_loop",
+        "SCHEMATIC": "schematic",
+        "OTHER": "other",
+    }
+    if compact in exact:
+        return exact[compact]
+    for code, canon in exact.items():
+        if compact.startswith(code + "_"):
+            return canon
+    low = s.lower()
+
+    def _has_token(token: str) -> bool:
+        return re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", low) is not None
+
+    if _has_token("ebsd"):
+        return "EBSD"
+    if "transmission electron" in low or _has_token("tem"):
+        return "TEM"
+    if "scanning electron" in low or _has_token("sem"):
+        return "SEM"
+    if "xrd" in low or "x-ray" in low or "x ray" in low or "diffraction pattern" in low:
+        return "XRD"
+    if "saed" in low:
+        return "SAED"
+    if "optical" in low or "macrograph" in low:
+        return "OM"
+    if "hysteresis" in low or "b-h" in low or "b–h" in low:
+        return "hysteresis_loop"
+    if "stress" in low and "strain" in low:
+        return "stress_strain_curve"
+    if (
+        "schematic" in low
+        or "diagram" in low
+        or "drawing" in low
+        or "solidification mode" in low
+    ):
+        return "schematic"
+    if "plot" in low or "curve" in low or "chart" in low or "profile" in low:
+        return "other"
+    if "color scale" in low or "colorbar" in low or "colour bar" in low:
+        return "other"
+    return s
+
+
 def classify_figures(figures: list, field_config: dict, apply_filter: bool) -> tuple[list, list]:
-    """按类型白名单过滤图片。apply_filter=False 时保留全部（模拟 one-shot）。"""
-    ff = field_config.get("figure_filter", {})
-    keep_types = set(ff.get("keep_types", []))
+    """按 is_microstructure_image / is_post_test_image 过滤图片。
+
+    不再用 figure_type 白名单做硬过滤（模型常写自由文本，短码对不上会误杀）。
+    apply_filter=False 时保留全部（模拟 one-shot）。
+    """
+    ff = field_config.get("figure_filter", {}) or {}
+    # 只认配置里的两个开关；不再读 keep_types / drop_types
+    require_micro = bool(ff.get("require_microstructure"))
+    drop_post = bool(ff.get("drop_if_post_test"))
     warnings = []
     kept = []
     for fig in figures or []:
         if not apply_filter:
-            kept.append({**fig, "status": "accepted"})
+            out = {**fig, "status": "accepted"}
+            out.pop("reject_reason", None)
+            kept.append(out)
             continue
-        ftype = fig.get("figure_type")
+        ftype = _figure_slot_value(fig.get("figure_type"))
         reason = None
-        if keep_types and ftype not in keep_types:
-            reason = f"类型 {ftype} 不在组织图白名单"
-        elif ff.get("require_microstructure") and fig.get("is_microstructure_image") is not True:
+        if require_micro and _figure_bool(fig.get("is_microstructure_image")) is not True:
             reason = "非组织图 is_microstructure_image=false"
-        elif ff.get("drop_if_post_test") and fig.get("is_post_test_image") is True:
+        elif drop_post and _figure_bool(fig.get("is_post_test_image")) is True:
             reason = "断后/post-test 图不入组织图库"
         if reason:
             warnings.append({
@@ -330,7 +645,9 @@ def classify_figures(figures: list, field_config: dict, apply_filter: bool) -> t
             })
             kept.append({**fig, "status": "rejected_by_rule", "reject_reason": reason})
             continue
-        kept.append({**fig, "status": "accepted"})
+        out = {**fig, "status": "accepted"}
+        out.pop("reject_reason", None)
+        kept.append(out)
     return kept, warnings
 
 
@@ -401,6 +718,103 @@ def get_paper_text(root: Path, project_cfg: dict, paper_id: str) -> str | None:
     return p.read_text(encoding="utf-8", errors="replace") if p.exists() else None
 
 
+_PATENT_SECTION_TITLES = frozenset({
+    "技术领域",
+    "背景技术",
+    "发明内容",
+    "附图说明",
+    "具体实施方式",
+    "具体实施例",
+    "实施方式",
+    "权利要求书",
+    "摘要",
+    "说明书附图",
+    "技術領域",
+    "背景技術",
+    "發明內容",
+    "圖式簡單說明",
+    "具體實施方式",
+    "申請專利範圍",
+})
+
+_PATENT_TITLE_LINE_RE = (
+    re.compile(r"\[54\]\s*发明名称\s*([^\n]{3,120})"),
+    re.compile(r"\(54\)\s*发明名称\s*([^\n]{3,120})"),
+    re.compile(r"发明名称\s*[:：]?\s*([^\n]{3,120})"),
+)
+
+
+def paper_title_from_md(text: str) -> str | None:
+    """列表展示用标题：专利优先发明名称；跳过「技术领域」等节名。"""
+    text = text or ""
+    for pat in _PATENT_TITLE_LINE_RE:
+        match = pat.search(text)
+        if not match:
+            continue
+        title = re.sub(r"\s+", " ", match.group(1)).strip(" #")
+        if title and title not in _PATENT_SECTION_TITLES:
+            return title[:120]
+
+    first_heading: str | None = None
+    for line in text.splitlines():
+        s = line.strip()
+        if not s.startswith("#"):
+            continue
+        title = s.lstrip("#").strip()
+        if not title:
+            continue
+        if first_heading is None:
+            first_heading = title
+        if title in _PATENT_SECTION_TITLES:
+            continue
+        return title
+    return first_heading
+
+
+def _paper_extract_status(root: Path, project_cfg: dict, paper_id: str) -> tuple[str, str | None, bool]:
+    """返回 (latest_status, error, has_any_success)。
+
+    latest_status: success | failed | none
+    has_any_success: 是否存在可复核的合并结果（旧成功 run 仍可进复核侧栏）。
+    """
+    runs = list_runs(root, project_cfg, paper_id)
+    if not runs:
+        return "none", None, False
+    has_success = False
+    for meta in runs:
+        if meta.get("status") == "failed":
+            continue
+        run_dir = Path(root) / project_cfg["test_runs"] / meta["partition"] / meta["run_id"]
+        if (run_dir / "merged_outputs" / "paper.json").exists():
+            has_success = True
+            break
+    latest = runs[0]
+    run_dir = Path(root) / project_cfg["test_runs"] / latest["partition"] / latest["run_id"]
+    paper_path = run_dir / "merged_outputs" / "paper.json"
+    if latest.get("status") == "failed" or not paper_path.exists():
+        err = latest.get("error") or "抽取未完成"
+        return "failed", str(err), has_success
+    return "success", None, True
+
+
+def list_paper_records(root: Path, project_cfg: dict) -> list:
+    records = []
+    for pid in list_papers(root, project_cfg):
+        text = get_paper_text(root, project_cfg, pid) or ""
+        status, err, has_success = _paper_extract_status(root, project_cfg, pid)
+        rec = {
+            "paper_id": pid,
+            "title": paper_title_from_md(text),
+            "parsed": True,
+            "extracted": has_success,
+            "extract_status": status,
+        }
+        if err:
+            rec["extract_error"] = err
+        records.append(rec)
+    return records
+
+
 def filter_result_by_status(result: dict, include_rejected: bool = True) -> dict:
     """Return a deep copy of result; drop rejected_by_rule props/figures when include_rejected is False."""
     out = copy.deepcopy(result)
@@ -446,6 +860,51 @@ def list_runs(root: Path, project_cfg: dict, paper_id: str | None = None) -> lis
                     continue
                 runs.append({"run_id": d.name, "partition": partition, **meta})
     return runs
+
+
+def delete_run(root: Path, project_cfg: dict, paper_id: str, run_id: str) -> dict:
+    """删除某文献下指定 run 目录（含 analysis）。不碰 parsed_results。"""
+    import shutil
+
+    root = Path(root)
+    paper_id = (paper_id or "").strip()
+    run_id = (run_id or "").strip()
+    if not paper_id or not run_id:
+        raise ValueError("需要 paper_id 与 run_id")
+    if Path(run_id).name != run_id or run_id in (".", ".."):
+        raise ValueError("非法 run_id")
+
+    runs = list_runs(root, project_cfg, paper_id)
+    meta = next((r for r in runs if r.get("run_id") == run_id), None)
+    if not meta:
+        raise FileNotFoundError(f"未找到该文献下的 run: {run_id}")
+
+    base = (root / project_cfg.get("test_runs", "")).resolve()
+    run_dir = (base / meta["partition"] / run_id).resolve()
+    try:
+        run_dir.relative_to(base)
+    except ValueError as exc:
+        raise ValueError("拒绝删除：路径越界") from exc
+    if not run_dir.is_dir():
+        raise FileNotFoundError(f"run 目录不存在: {run_id}")
+
+    info_path = run_dir / "RUN_INFO.json"
+    if info_path.exists():
+        try:
+            info = json.loads(info_path.read_text(encoding="utf-8"))
+        except Exception:
+            info = {}
+        if info.get("paper_id") and info.get("paper_id") != paper_id:
+            raise ValueError("run 与 paper_id 不匹配，拒绝删除")
+
+    shutil.rmtree(run_dir)
+    return {
+        "ok": True,
+        "paper_id": paper_id,
+        "run_id": run_id,
+        "partition": meta["partition"],
+        "deleted": str(run_dir),
+    }
 
 
 def _empty_entity() -> dict:
@@ -524,7 +983,25 @@ def _load_run_artifacts(state: dict) -> None:
 def _write_run_outputs(state: dict) -> dict:
     """合并结果并写 paper.json / RUN_INFO / summary，返回 result。"""
     steps = get_steps(state["field_config"])
-    entity = state["entity"]
+    entity, bind_warnings = bind_condition_sample_ids(state.get("entity") or {})
+    state["entity"] = entity
+    # 保留 Stage1 已记录的自动补全审计；只刷新仍未绑定/无效的告警
+    prev = state.get("warnings") or []
+    state["warnings"] = [
+        w for w in prev
+        if w.get("type") not in ("condition_missing_sample_id", "condition_invalid_sample_id")
+    ]
+    seen = {
+        (w.get("type"), w.get("condition_id"))
+        for w in state["warnings"]
+        if w.get("type") in _BIND_WARNING_TYPES
+    }
+    for w in bind_warnings:
+        key = (w.get("type"), w.get("condition_id"))
+        if key in seen:
+            continue
+        state["warnings"].append(w)
+        seen.add(key)
     property_groups = state["property_groups"]
     if not any(s.get("type") == "figure" for s in steps):
         _apply_figure_policy(state, state["apply_rules"])
@@ -559,6 +1036,7 @@ def _write_run_outputs(state: dict) -> dict:
         "partition": state["partition"],
         "backend": state["backend"].name,
         "created_at": state.get("created_at") or datetime.now().isoformat(timespec="seconds"),
+        "status": "success",
         "steps": len(steps),
         "samples": len(result.get("samples", [])),
         "conditions": len(result.get("conditions", [])),
@@ -588,12 +1066,6 @@ def _prepare_run(root: Path, project_id: str, paper_id: str, *,
     project_cfg = ws_cfg["projects"].get(project_id)
     if not project_cfg:
         raise ValueError(f"未知项目: {project_id}")
-    if not project_cfg.get("runnable", False):
-        raise RuntimeError(
-            f"项目 {project_id} 为只读快照，本地无 parsed_results，无法试跑；"
-            f"请选择 demo_steel 离线体验。"
-        )
-
     if model_id and project_cfg.get("backend") == "claude":
         model_cfg = next((m for m in ws_cfg.get("models", []) if m.get("id") == model_id), None)
         if model_cfg:
@@ -608,11 +1080,14 @@ def _prepare_run(root: Path, project_id: str, paper_id: str, *,
     if not paper_md.exists():
         raise FileNotFoundError(f"paper.md 不存在: {paper_md}")
 
-    backend = get_backend(project_cfg.get("backend", "mock"), root)
+    backend = get_backend(project_cfg.get("backend", "claude"), root)
     apply_rules = mode != "single_pass"
 
     parsed = parse_paper_md(paper_id, paper_md)
-    trimmed_text, trim_stats = trim_input(parsed.text_with_placeholders)
+    kind = project_document_kind(root, project_cfg)
+    trimmed_text, trim_stats = prepare_model_text(
+        parsed.text_with_placeholders, kind, paper_id=paper_id
+    )
     images_payload = [
         {"label": im.label or f"Image {im.index}", "media_type": im.media_type, "data": im.data_b64}
         for im in parsed.images
@@ -720,6 +1195,8 @@ def _execute_step(state: dict, step: dict) -> None:
             "材料文献结构化抽取专家", prompt, state["images_payload"],
             hint={"stage": "entity", "step_id": sid, "paper_id": paper_id},
         )
+        ent = normalize_entity_provenance(ent if isinstance(ent, dict) else {})
+        ent, bind_warnings = bind_condition_sample_ids(ent)
         entity = _empty_entity()
         if ent.get("paper_metadata"):
             entity["paper_metadata"].update(ent.get("paper_metadata") or {})
@@ -728,19 +1205,27 @@ def _execute_step(state: dict, step: dict) -> None:
         entity["figures"].extend(ent.get("figures") or [])
         state["entity"] = entity
         state["condition_ids"] = [c.get("condition_id") for c in entity["conditions"]]
+        state["warnings"] = [
+            w for w in state.get("warnings") or []
+            if w.get("type") not in _BIND_WARNING_TYPES
+        ]
+        state["warnings"].extend(bind_warnings)
         (run_dir / "entities" / f"{sid}.json").write_text(
             json.dumps(ent, ensure_ascii=False, indent=2), encoding="utf-8")
         state["step_reports"].append({
             "id": sid, "name": sname, "type": stype,
             "output": {"samples": entity["samples"], "conditions": entity["conditions"]},
-            "warnings": [],
+            "warnings": bind_warnings,
         })
 
     elif stype == "property":
         if mode == "entity_only":
             return
         group = step.get("group", "properties")
-        prompt = build_property_prompt(field_config, step, state["condition_ids"])
+        prompt = build_property_prompt(
+            field_config, step,
+            condition_skeleton_from_entity(state.get("entity") or {}),
+            state["trimmed_text"])
         state["prompts"][sid] = prompt
         (run_dir / "prompt_preview" / f"{sid}_prompt.txt").write_text(prompt, encoding="utf-8")
         raw = backend.call_json(
@@ -792,7 +1277,7 @@ def _execute_step(state: dict, step: dict) -> None:
         state["warnings"] = [w for w in state["warnings"] if w.get("type") != "figure_dropped"]
         if apply_rules:
             state["warnings"].extend(fig_warnings)
-        state["prompts"][sid] = "（图片分类为确定性规则步骤：按 figure_filter 白名单过滤，非 LLM prompt）"
+        state["prompts"][sid] = "（图片分类为确定性规则步骤：按 is_microstructure_image / is_post_test_image 过滤，非 LLM prompt）"
         (run_dir / "properties" / f"{sid}_figures.json").write_text(
             json.dumps(figures, ensure_ascii=False, indent=2), encoding="utf-8")
         state["step_reports"].append({
@@ -838,80 +1323,128 @@ def _invalidate_downstream(state: dict) -> list:
     return invalidated
 
 
+
+def _write_failed_run(state: dict, exc: BaseException) -> None:
+    """抽取中途失败时落 RUN_INFO，便于文献表标「抽取失败」并支持重新抽取。"""
+    run_dir = state.get("run_dir")
+    if not run_dir:
+        return
+    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "review_notes").mkdir(parents=True, exist_ok=True)
+    backend = state.get("backend")
+    run_info = {
+        "run_id": state.get("run_id"),
+        "project_id": state.get("project_id"),
+        "paper_id": state.get("paper_id"),
+        "mode": state.get("mode"),
+        "partition": state.get("partition"),
+        "backend": getattr(backend, "name", None) or str(backend or ""),
+        "created_at": state.get("created_at") or datetime.now().isoformat(timespec="seconds"),
+        "status": "failed",
+        "error": str(exc),
+        "completed_steps": list(state.get("completed_steps") or []),
+        "invalidated_steps": list(state.get("invalidated_steps") or []),
+        "parse_skipped": bool(state.get("parse_skipped", True)),
+        "samples": len((state.get("entity") or {}).get("samples") or []),
+        "conditions": len((state.get("entity") or {}).get("conditions") or []),
+        "figures": 0,
+        "warnings": len(state.get("warnings") or []),
+        "template_id": state.get("template_id"),
+    }
+    if state.get("model_id"):
+        run_info["model_id"] = state["model_id"]
+    (run_dir / "RUN_INFO.json").write_text(
+        json.dumps(run_info, ensure_ascii=False, indent=2), encoding="utf-8")
+    state["run_info"] = run_info
+
+
 def run_extraction(root: Path, project_id: str, paper_id: str,
                    mode: str = "two_stage", partition: str = "test",
                    model_id: str | None = None) -> dict:
-    state = _prepare_run(
-        root, project_id, paper_id, mode=mode, partition=partition, model_id=model_id)
-    steps = get_steps(state["field_config"])
-    for step in steps:
-        if mode == "entity_only" and step.get("type") != "entity":
-            continue
-        _execute_step(state, step)
-    result = _write_run_outputs(state)
-    return {
-        "run_id": state["run_id"],
-        "run_dir": str(state["run_dir"]),
-        "run_info": state["run_info"],
-        "result": result,
-        "entity": state["entity"],
-        "property_groups": state["property_groups"],
-        "figures": state["figures"],
-        "warnings": state["warnings"],
-        "trim_stats": state["trim_stats"],
-        "steps": state["step_reports"],
-        "prompts": state["prompts"],
-    }
+    state = None
+    try:
+        state = _prepare_run(
+            root, project_id, paper_id, mode=mode, partition=partition, model_id=model_id)
+        steps = get_steps(state["field_config"])
+        for step in steps:
+            if mode == "entity_only" and step.get("type") != "entity":
+                continue
+            _execute_step(state, step)
+        result = _write_run_outputs(state)
+        return {
+            "run_id": state["run_id"],
+            "run_dir": str(state["run_dir"]),
+            "run_info": state["run_info"],
+            "result": result,
+            "entity": state["entity"],
+            "property_groups": state["property_groups"],
+            "figures": state["figures"],
+            "warnings": state["warnings"],
+            "trim_stats": state["trim_stats"],
+            "steps": state["step_reports"],
+            "prompts": state["prompts"],
+        }
+    except Exception as exc:
+        if state is not None:
+            _write_failed_run(state, exc)
+        raise
 
 
 def run_step(root: Path, project_id: str, paper_id: str, step_id: str,
              run_id: str | None = None, partition: str = "test",
              model_id: str | None = None) -> dict:
     """分阶段执行单个步骤；重跑骨架时作废并自动重跑全部下游。"""
-    state = _prepare_run(
-        root, project_id, paper_id,
-        mode="two_stage", partition=partition, model_id=model_id, run_id=run_id)
-    step = _find_step(state["field_config"], step_id)
-    stype = step.get("type")
-    invalidated: list = []
+    state = None
+    try:
+        state = _prepare_run(
+            root, project_id, paper_id,
+            mode="two_stage", partition=partition, model_id=model_id, run_id=run_id)
+        step = _find_step(state["field_config"], step_id)
+        stype = step.get("type")
+        invalidated: list = []
 
-    if stype in ("property", "figure") and not _skeleton_done(state):
-        raise RuntimeError("必须先完成骨架")
+        if stype in ("property", "figure") and not _skeleton_done(state):
+            raise RuntimeError("必须先完成骨架")
 
-    if stype == "entity":
-        # 重跑骨架：作废下游并自动重跑
-        had_downstream = bool(state.get("property_groups")) or any(
-            sid for sid in state.get("completed_steps") or []
-            if sid in {s.get("id") for s in _downstream_steps(state["field_config"])}
-        ) or any((state["run_dir"] / "properties").glob("*"))
-        if had_downstream:
-            invalidated = _invalidate_downstream(state)
-        _execute_step(state, step)
-        if had_downstream:
-            for down in _downstream_steps(state["field_config"]):
-                if state["mode"] == "entity_only" and down.get("type") != "entity":
-                    continue
-                _execute_step(state, down)
-    else:
-        state["invalidated_steps"] = []
-        _execute_step(state, step)
+        if stype == "entity":
+            # 重跑骨架：作废下游并自动重跑
+            had_downstream = bool(state.get("property_groups")) or any(
+                sid for sid in state.get("completed_steps") or []
+                if sid in {s.get("id") for s in _downstream_steps(state["field_config"])}
+            ) or any((state["run_dir"] / "properties").glob("*"))
+            if had_downstream:
+                invalidated = _invalidate_downstream(state)
+            _execute_step(state, step)
+            if had_downstream:
+                for down in _downstream_steps(state["field_config"]):
+                    if state["mode"] == "entity_only" and down.get("type") != "entity":
+                        continue
+                    _execute_step(state, down)
+        else:
+            state["invalidated_steps"] = []
+            _execute_step(state, step)
 
-    result = _write_run_outputs(state)
-    return {
-        "run_id": state["run_id"],
-        "run_dir": str(state["run_dir"]),
-        "run_info": state["run_info"],
-        "step": step_id,
-        "result": result,
-        "invalidated": invalidated,
-        "entity": state["entity"],
-        "property_groups": state["property_groups"],
-        "figures": state["figures"],
-        "warnings": state["warnings"],
-        "trim_stats": state["trim_stats"],
-        "steps": state["step_reports"],
-        "prompts": state["prompts"],
-    }
+        result = _write_run_outputs(state)
+        return {
+            "run_id": state["run_id"],
+            "run_dir": str(state["run_dir"]),
+            "run_info": state["run_info"],
+            "step": step_id,
+            "result": result,
+            "invalidated": invalidated,
+            "entity": state["entity"],
+            "property_groups": state["property_groups"],
+            "figures": state["figures"],
+            "warnings": state["warnings"],
+            "trim_stats": state["trim_stats"],
+            "steps": state["step_reports"],
+            "prompts": state["prompts"],
+        }
+    except Exception as exc:
+        if state is not None:
+            _write_failed_run(state, exc)
+        raise
 
 
 def _resolve_reextract_field(root: Path, project_cfg: dict, field_id: str) -> tuple[dict, dict]:
@@ -1031,14 +1564,15 @@ def _reextract_one_paper(root: Path, project_id: str, project_cfg: dict,
                 os.environ["LLM_MODEL"] = model_cfg["model"]
             if model_cfg.get("base_url"):
                 os.environ["LLM_BASE_URL"] = model_cfg["base_url"]
-    backend = get_backend(project_cfg.get("backend", "mock"), root)
+    backend = get_backend(project_cfg.get("backend", "claude"), root)
 
     text_path = run_dir / "inputs" / "parsed_text.txt"
     if text_path.exists():
         trimmed_text = text_path.read_text(encoding="utf-8", errors="replace")
     else:
         raw = get_paper_text(root, project_cfg, paper_id) or ""
-        trimmed_text, _ = trim_input(raw)
+        kind = project_document_kind(root, project_cfg)
+        trimmed_text, _ = prepare_model_text(raw, kind, paper_id=paper_id)
 
     note = {
         "field_id": field_id,
@@ -1052,10 +1586,7 @@ def _reextract_one_paper(root: Path, project_id: str, project_cfg: dict,
     try:
         cat = field.get("category")
         if cat == "property":
-            condition_ids = [
-                c.get("condition_id") for c in (result.get("conditions") or [])
-                if c.get("condition_id")
-            ]
+            condition_ids = condition_skeleton_from_entity(result)
             prompt = build_reextract_property_prompt(
                 field_config, field_id, condition_ids, trimmed_text)
             (run_dir / "prompt_preview" / f"reextract_{field_id}_prompt.txt").write_text(
@@ -1180,12 +1711,6 @@ def reextract_field(root: Path, project_id: str, field_id: str,
     project_cfg = ws_cfg["projects"].get(project_id)
     if not project_cfg:
         raise ValueError(f"未知项目: {project_id}")
-    if not project_cfg.get("runnable", False):
-        raise RuntimeError(
-            f"项目 {project_id} 为只读快照，本地无 parsed_results，无法试跑；"
-            f"请选择 demo_steel 离线体验。"
-        )
-
     _, field = _resolve_reextract_field(root, project_cfg, field_id)
 
     if scope == "project_extracted":

@@ -11,7 +11,11 @@
   ],
   "property_groups": [
     {"id": "mechanical_properties", "name": "力学性能"},
-    {"id": "magnetic_properties", "name": "磁性能"}
+    {"id": "magnetic_properties", "name": "磁性能"},
+    {"id": "electrical_properties", "name": "电性能"},
+    {"id": "impact_properties", "name": "冲击性能"},
+    {"id": "corrosion_properties", "name": "腐蚀性能"},
+    {"id": "phase_stability", "name": "相稳定性"}
   ],
   "identity_fields": ["sample_id", "condition_id"]
 }

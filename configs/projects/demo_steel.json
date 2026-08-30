@@ -17,7 +17,6 @@
     "condition_processing_description",
     "yield_strength",
     "elongation",
-    "permeability",
     "figure_id",
     "placeholder_index",
     "figure_type",
@@ -30,20 +29,21 @@
   "field_overrides": {},
   "step_overrides": null,
   "steps": [
-    {"id": "entity", "type": "entity", "name": "骨架"},
+    {
+      "id": "entity",
+      "type": "entity",
+      "name": "骨架"
+    },
     {
       "id": "mechanical",
       "type": "property",
       "name": "力学性能",
       "group": "mechanical_properties",
-      "fields": ["yield_strength", "tensile_strength", "elongation"]
-    },
-    {
-      "id": "magnetic",
-      "type": "property",
-      "name": "磁性能",
-      "group": "magnetic_properties",
-      "fields": ["permeability"]
+      "fields": [
+        "yield_strength",
+        "tensile_strength",
+        "elongation"
+      ]
     }
   ],
   "property_source": {
@@ -90,7 +90,7 @@
       "schematic",
       "other"
     ],
-    "drop_if_post_test": true,
-    "require_microstructure": true
+    "require_microstructure": true,
+    "drop_if_post_test": true
   }
 }

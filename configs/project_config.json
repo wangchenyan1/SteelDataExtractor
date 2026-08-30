@@ -7,59 +7,101 @@
   },
   "default_project": "demo_steel",
   "models": [
-    {"id": "mock", "label": "离线示例 mock（无需 key）", "backend": "mock", "base_url": "(离线，无需网络)", "model": "mock-two-stage"},
-    {"id": "claude-4.5-sonnet", "label": "Claude 4.5 Sonnet（多模态）", "backend": "claude", "base_url": "https://api.gpugeek.com/v1/messages", "model": "Vendor2/Claude-4.5-Sonnet"},
-    {"id": "gemini-2.5-flash", "label": "Gemini 2.5 Flash（多模态）", "backend": "claude", "base_url": "https://api.gpugeek.com/v1/messages", "model": "Vendor/Gemini-2.5-Flash"},
-    {"id": "qwen-vl-max", "label": "Qwen-VL-Max（多模态）", "backend": "claude", "base_url": "https://api.gpugeek.com/v1/messages", "model": "Vendor/Qwen-VL-Max"}
+    {
+      "id": "claude-4.5-sonnet",
+      "label": "Claude 4.5 Sonnet（多模态）",
+      "backend": "claude",
+      "base_url": "https://api.gpugeek.com/v1/messages",
+      "model": "Vendor2/Claude-4.5-Sonnet"
+    },
+    {
+      "id": "gemini-2.5-flash",
+      "label": "Gemini 2.5 Flash（多模态）",
+      "backend": "claude",
+      "base_url": "https://api.gpugeek.com/v1/messages",
+      "model": "Vendor/Gemini-2.5-Flash"
+    },
+    {
+      "id": "qwen-vl-max",
+      "label": "Qwen-VL-Max（多模态）",
+      "backend": "claude",
+      "base_url": "https://api.gpugeek.com/v1/messages",
+      "model": "Vendor/Qwen-VL-Max"
+    }
   ],
   "projects": {
     "demo_steel": {
-      "name": "示例：不锈钢文献（离线可跑）",
-      "description": "内置样例项目：无需 API key / 网络，用 mock 后端端到端演示两阶段抽取与规则校验。复制这份配置改字段即可用于自己的领域。",
+      "name": "示例：不锈钢文献",
+      "description": "示例项目。已导入真实文献 10.1007_s11665-019-04233-6。抽取走真实多模态后端，需工作区 .env 中 GPUGEEK/UNIPARSER key。",
       "runnable": true,
-      "backend": "mock",
+      "backend": "claude",
       "parsed_results": "example_data/example_demo/parsed_results",
       "field_config": "configs/fields/demo_steel.json",
       "template_id": "steel",
       "overlay": "configs/projects/demo_steel.json",
       "test_runs": "test_runs/demo_steel",
-      "stages": ["entity_skeleton", "property_binding", "figure_classification", "rule_validation", "merge_export"]
+      "stages": [
+        "entity_skeleton",
+        "property_binding",
+        "figure_classification",
+        "rule_validation",
+        "merge_export"
+      ]
     },
     "non_magnetic": {
       "name": "无磁钢",
-      "runnable": false,
+      "description": "无磁钢抽取项目。上传 PDF 后可解析并抽取。",
+      "runnable": true,
       "backend": "claude",
-      "field_config": "configs/fields/non_magnetic.json",
-      "script_snapshot": "script_snapshots/non_magnetic/scripts",
-      "test_runs": "test_runs/non_magnetic",
-      "stages": ["entity_skeleton", "property_binding", "figure_classification", "rule_validation", "merge_export"]
+      "template_id": "steel",
+      "overlay": "configs/projects/non_magnetic.json",
+      "field_config": "configs/projects/non_magnetic.json",
+      "parsed_results": "parsed_results/non_magnetic",
+      "test_runs": "test_runs/non_magnetic"
     },
     "nuclear_fusion": {
       "name": "核聚变低磁奥氏体钢",
-      "runnable": false,
+      "description": "核聚变低磁奥氏体钢抽取项目。上传 PDF 后可解析并抽取。",
+      "runnable": true,
       "backend": "claude",
-      "field_config": "configs/fields/nuclear_fusion.json",
-      "script_snapshot": "script_snapshots/nuclear_fusion/scripts",
-      "test_runs": "test_runs/nuclear_fusion",
-      "stages": ["entity_skeleton", "property_binding", "figure_classification", "rule_validation", "merge_export"]
+      "template_id": "steel",
+      "overlay": "configs/projects/nuclear_fusion.json",
+      "field_config": "configs/projects/nuclear_fusion.json",
+      "parsed_results": "parsed_results/nuclear_fusion",
+      "test_runs": "test_runs/nuclear_fusion"
     },
     "cor_res": {
       "name": "耐蚀钢",
-      "runnable": false,
+      "description": "耐蚀钢抽取项目。上传 PDF 后可解析并抽取。",
+      "runnable": true,
       "backend": "claude",
-      "field_config": "configs/fields/cor_res.json",
-      "script_snapshot": "script_snapshots/cor_res/scripts",
-      "test_runs": "test_runs/cor_res",
-      "stages": ["entity_skeleton", "property_binding", "figure_classification", "rule_validation", "merge_export"]
+      "template_id": "steel",
+      "overlay": "configs/projects/cor_res.json",
+      "field_config": "configs/projects/cor_res.json",
+      "parsed_results": "parsed_results/cor_res",
+      "test_runs": "test_runs/cor_res"
     },
     "cuti": {
-      "name": "钛铜",
-      "runnable": false,
+      "name": "钛铜文献",
+      "description": "钛铜学术文献抽取项目。文档类型为学术文献；请勿与专利混放。",
+      "runnable": true,
       "backend": "claude",
-      "field_config": "configs/fields/cuti.json",
-      "script_snapshot": "script_snapshots/cuti/scripts",
-      "test_runs": "test_runs/cuti",
-      "stages": ["entity_skeleton", "property_binding", "figure_classification", "rule_validation", "merge_export"]
+      "template_id": "steel",
+      "overlay": "configs/projects/cuti.json",
+      "field_config": "configs/projects/cuti.json",
+      "parsed_results": "parsed_results/cuti_trial",
+      "test_runs": "test_runs/cuti_trial"
+    },
+    "cuti_patent": {
+      "name": "钛铜专利",
+      "description": "钛铜专利抽取项目。文档类型为专利；与钛铜文献分库存放。",
+      "runnable": true,
+      "backend": "claude",
+      "template_id": "steel",
+      "overlay": "configs/projects/cuti_patent.json",
+      "field_config": "configs/projects/cuti_patent.json",
+      "parsed_results": "parsed_results/cuti_patent",
+      "test_runs": "test_runs/cuti_patent"
     }
   }
 }

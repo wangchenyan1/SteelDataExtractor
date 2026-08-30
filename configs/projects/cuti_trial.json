@@ -1,0 +1,33 @@
+{
+  "template_id": "steel",
+  "selected_field_ids": [
+    "title",
+    "material_system",
+    "sample_id",
+    "sample_name",
+    "product_form",
+    "alloy_family",
+    "composition",
+    "base_processing_description",
+    "condition_id",
+    "condition_name",
+    "condition_type",
+    "heat_treatment_condition",
+    "test_temperature",
+    "condition_processing_description",
+    "yield_strength",
+    "tensile_strength",
+    "elongation",
+    "figure_id",
+    "placeholder_index",
+    "figure_type",
+    "is_microstructure_image",
+    "is_post_test_image",
+    "scale_bar_info"
+  ],
+  "private_fields": [],
+  "field_overrides": {},
+  "step_overrides": null,
+  "property_source": {},
+  "figure_filter": {}
+}

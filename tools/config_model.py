@@ -23,6 +23,8 @@ _FIELD_KEYS = (
     "note",
 )
 
+LOCKED_FIELD_IDS = ("sample_id", "condition_id", "figure_id", "placeholder_index")
+
 
 def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -75,6 +77,19 @@ def identity_field_ids(template: dict) -> set[str]:
     return set(template.get("identity_fields") or [])
 
 
+def merged_property_groups(template: dict, overlay: dict) -> list[dict]:
+    """模板大类顺序 + 覆盖层自建大类；同 id 以模板为准。"""
+    seen: set[str] = set()
+    out: list[dict] = []
+    for g in list(template.get("property_groups") or []) + list(overlay.get("property_groups") or []):
+        gid = g.get("id")
+        if not gid or gid in seen:
+            continue
+        seen.add(gid)
+        out.append(g)
+    return out
+
+
 def generate_steps(template: dict, fields: list[dict], overlay: dict) -> list[dict]:
     if overlay.get("steps"):
         return list(overlay["steps"])
@@ -100,8 +115,9 @@ def generate_steps(template: dict, fields: list[dict], overlay: dict) -> list[di
         if g:
             group_fields.setdefault(g, []).append(f["id"])
 
-    group_names = {g["id"]: g.get("name", g["id"]) for g in template.get("property_groups") or []}
-    for ginfo in template.get("property_groups") or []:
+    groups = merged_property_groups(template, overlay)
+    group_names = {g["id"]: g.get("name", g["id"]) for g in groups}
+    for ginfo in groups:
         gid = ginfo["id"]
         if gid not in group_fields:
             continue
@@ -119,8 +135,59 @@ def generate_steps(template: dict, fields: list[dict], overlay: dict) -> list[di
     return steps
 
 
+def assign_property_to_stage(stages: list, field: dict, group_names: dict) -> list:
+    stages = [dict(s, fields=list(s.get("fields") or [])) for s in (stages or [])]
+    fid = field["id"]
+    group = field.get("group") or ""
+    if any(fid in (s.get("fields") or []) for s in stages):
+        return stages
+    target = None
+    if group:
+        target = next((s for s in stages if s.get("group") == group), None)
+    elif not group:
+        target = next((s for s in stages if s.get("id") == "other"), None)
+        if target is None:
+            target = {
+                "id": "other",
+                "type": "property",
+                "name": "其他性能",
+                "group": "other_properties",
+                "fields": [],
+            }
+            stages.append(target)
+    if target is None:
+        base_id = group.removesuffix("_properties") if group else "other"
+        step_id = base_id
+        existing = {s.get("id") for s in stages}
+        n = 2
+        while step_id in existing:
+            step_id = f"{base_id}_{n}"
+            n += 1
+        target = {
+            "id": step_id,
+            "type": "property",
+            "name": group_names.get(group, group or "其他性能"),
+            "group": group or "other_properties",
+            "fields": [],
+        }
+        stages.append(target)
+    if fid not in target["fields"]:
+        target["fields"].append(fid)
+    return stages
+
+
+def strip_empty_property_steps(steps: list) -> list:
+    out = []
+    for s in steps or []:
+        if s.get("type") == "property" and not list(s.get("fields") or []):
+            continue
+        out.append(s)
+    return out
+
+
 def validate_overlay_stages(overlay: dict, fields: list[dict]) -> None:
-    steps = overlay.get("steps") or []
+    steps = strip_empty_property_steps(overlay.get("steps") or [])
+    overlay["steps"] = steps
     if not steps:
         return
 
@@ -136,8 +203,6 @@ def validate_overlay_stages(overlay: dict, fields: list[dict]) -> None:
         if s.get("type") != "property":
             continue
         fl = list(s.get("fields") or [])
-        if not fl:
-            raise ValueError("性能阶段 fields 不能为空")
         assigned.extend(fl)
 
     if len(assigned) != len(set(assigned)):
@@ -154,7 +219,14 @@ def validate_overlay_stages(overlay: dict, fields: list[dict]) -> None:
 
 
 def save_overlay(root: Path, project_id: str, overlay: dict) -> None:
+    try:
+        from input_trim import normalize_document_kind
+    except ImportError:
+        from tools.input_trim import normalize_document_kind
+
+    overlay["document_kind"] = normalize_document_kind(overlay.get("document_kind"))
     if overlay.get("steps"):
+        overlay["steps"] = strip_empty_property_steps(overlay["steps"])
         template_id = overlay.get("template_id") or "blank"
         library = load_field_library(root, template_id)
         fields = effective_fields(library, overlay)
@@ -225,7 +297,18 @@ def create_project(
         "step_overrides": None,
         "property_source": {},
         "figure_filter": {},
+        "document_kind": "paper",
     }
+    library = load_field_library(root, template_id)
+    lib_ids = {f["id"] for f in library.get("fields") or []}
+    selected = list(selected_field_ids)
+    for lid in LOCKED_FIELD_IDS:
+        if lid in lib_ids and lid not in selected:
+            selected.append(lid)
+    overlay["selected_field_ids"] = selected
+    template = load_template(root, template_id)
+    fields = effective_fields(library, overlay)
+    overlay["steps"] = generate_steps(template, fields, overlay)
     save_overlay(root, project_id, overlay)
 
     cfg_path = root / "configs" / "project_config.json"

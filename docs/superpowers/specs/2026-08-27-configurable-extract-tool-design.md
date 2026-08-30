@@ -273,7 +273,7 @@ HTTP：`GET /api/projects/:id/export`。CLI：`--export-fields-schema`。
 - 上传的 PDF 同时保存为该文献目录下的 `source.pdf`，供以后打开，不替代 `paper.md` 作为抽取输入。
 - API key 仍读环境变量 `UNIPARSER_API_KEY` / `UP_API_KEY` 或工作区 `.env`，不写进配置文件。
 
-离线 `demo_steel` 继续用内置 `example_data/.../paper.md`，不调用 UniParser。
+已有 `paper.md` 时默认不调用 UniParser。`demo_steel` 示例文献在 `example_data/example_demo/parsed_results`。
 
 现有 `tools/paper_parser.py` 职责不变：从 `paper.md` 拆文本占位符和图片，供抽取模型使用。
 
@@ -376,8 +376,8 @@ CLI 与 HTTP 能力对齐：`--run-once` 保留；增加 `--parse-only`、`--ste
 
 ## 9. 验收
 
-1. **离线 demo（无 UniParser、无抽取 API key）**  
-   用 `demo_steel` 内置文献：一次跑完、分阶段（先骨架后性能）、单字段重抽、结果可点出处（mock 后端返回 excerpt/location）。改项目规则后库文件内容不变。
+1. **真实抽取（需 LLM API key）**  
+   用 `demo_steel` 已解析文献：一次跑完、分阶段（先骨架后性能）、单字段重抽、结果可点出处。改项目规则后库文件内容不变。
 
 2. **解析**  
    有 UniParser key 时，上传 PDF 后在 `parsed_results/<project>/...` 得到 `paper.md` 与图片；不写 `Extract_data`。无 key 时错误信息明确。已有 md 默认不重复解析。

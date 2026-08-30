@@ -8,9 +8,9 @@
 
 启动：
     python3 tools/workbench_server.py --host 127.0.0.1 --port 8787
-命令行试跑一篇（无需页面/网络，用内置样例）：
+命令行试跑一篇：
     python3 tools/workbench_server.py --run-once --project demo_steel \
-        --paper-id demo_steel_2024 --mode two_stage --partition test
+        --paper-id 10.1007_s11665-019-04233-6 --mode two_stage --partition test
 """
 
 from __future__ import annotations
@@ -32,6 +32,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import config_model  # noqa: E402
 import pdf_parser  # noqa: E402
 import pipeline  # noqa: E402
+import result_analysis  # noqa: E402
+from llm_backends import _load_env  # noqa: E402
+
+_load_env(ROOT)
 
 
 STATIC_TYPES = {
@@ -135,16 +139,26 @@ def paper_meta(root: Path, project_id: str, paper_id: str) -> dict | None:
         if not paper_dir.is_dir():
             return None
         images_dir = paper_dir / "images_from_md"
-        image_count = 0
-        if images_dir.is_dir():
-            image_count = sum(1 for p in images_dir.iterdir() if p.is_file())
+        image_names: list[str] = []
+        md_path = paper_dir / "paper.md"
+        has_md = md_path.is_file()
+        if has_md:
+            text = md_path.read_text(encoding="utf-8", errors="replace")
+            for m in re.finditer(r"(?:images_from_md/)([^)\s\"']+)", text):
+                name = Path(m.group(1)).name
+                if name and name not in image_names:
+                    image_names.append(name)
+        if images_dir.is_dir() and not image_names:
+            image_names = sorted(
+                p.name for p in images_dir.iterdir() if p.is_file()
+            )
         has_pdf = resolve_paper_pdf_path(root, project_id, paper_id) is not None
-        has_md = (paper_dir / "paper.md").is_file()
         return {
             "paper_id": paper_id,
             "has_pdf": has_pdf,
             "has_md": has_md,
-            "image_count": image_count,
+            "image_count": len(image_names),
+            "images": image_names,
         }
     except (OSError, ValueError, KeyError):
         return None
@@ -156,6 +170,22 @@ def _parse_bool_qs(val, default: bool = True) -> bool:
     return str(val).lower() not in ("0", "false", "no", "")
 
 
+try:
+    from input_trim import normalize_document_kind
+except ImportError:
+    from tools.input_trim import normalize_document_kind
+
+
+def _project_document_kind(project_id: str, cfg: dict) -> str:
+    if not cfg.get("overlay"):
+        return "paper"
+    try:
+        overlay = config_model.load_overlay(ROOT, project_id)
+        return normalize_document_kind(overlay.get("document_kind"))
+    except Exception:
+        return "paper"
+
+
 def build_projects_payload() -> dict:
     ws = pipeline.load_workspace_config(ROOT)
     projects = {}
@@ -165,15 +195,16 @@ def build_projects_payload() -> dict:
             "id": pid,
             "name": cfg.get("name", pid),
             "description": cfg.get("description", ""),
-            "runnable": cfg.get("runnable", False),
-            "backend": cfg.get("backend", "mock"),
+            "runnable": cfg.get("runnable", True),
+            "backend": cfg.get("backend", "claude"),
             "stages": cfg.get("stages", []),
             "steps": field_config.get("steps", []),
             "fields": field_config.get("fields", {}),
             "rules": field_config.get("rules", {}),
             "property_source": field_config.get("property_source", {}),
             "figure_filter": field_config.get("figure_filter", {}),
-            "papers": pipeline.list_papers(ROOT, cfg),
+            "papers": pipeline.list_paper_records(ROOT, cfg),
+            "document_kind": _project_document_kind(pid, cfg),
         }
     return {
         "default_project": ws.get("default_project"),
@@ -200,6 +231,18 @@ def latest_result(project_id: str, paper_id: str, run_id: str | None = None) -> 
     warnings = []
     if warnings_path.exists():
         warnings = json.loads(warnings_path.read_text(encoding="utf-8"))
+    # 加载时按 is_microstructure_image / is_post_test_image 重判，不改写磁盘 paper.json
+    # （磁盘里可能仍残留旧的「不在组织图白名单」文案）
+    field_config = pipeline.load_field_config(ROOT, cfg)
+    figures = result.get("figures") or []
+    ff = (field_config.get("figure_filter") or {})
+    if figures and (ff.get("require_microstructure") or ff.get("drop_if_post_test")):
+        reclassed, fig_warnings = pipeline.classify_figures(
+            figures, field_config, apply_filter=True
+        )
+        result = {**result, "figures": reclassed}
+        warnings = [w for w in warnings if w.get("type") != "figure_dropped"]
+        warnings.extend(fig_warnings)
     return {"run_info": target, "result": result, "warnings": warnings}
 
 
@@ -320,12 +363,12 @@ def handle_get(route: str, qs: dict) -> tuple[int, dict | BinaryBody]:
         return 200, build_projects_payload()
     if route == "/api/papers":
         cfg = pipeline.load_workspace_config(ROOT)["projects"].get(_q(qs, "project"), {})
-        return 200, {"papers": pipeline.list_papers(ROOT, cfg)}
+        return 200, {"papers": pipeline.list_paper_records(ROOT, cfg)}
     if route == "/api/paper_text":
         cfg = pipeline.load_workspace_config(ROOT)["projects"].get(_q(qs, "project"), {})
         text = pipeline.get_paper_text(ROOT, cfg, _q(qs, "paper_id", ""))
         if text is None:
-            return 404, {"error": "paper.md 未找到（该项目可能是只读快照，本地无原文）"}
+            return 404, {"error": "paper.md 未找到，请先上传 PDF 并解析"}
         return 200, {"paper_id": _q(qs, "paper_id"), "text": text}
     if route == "/api/paper_meta":
         project_id = _q(qs, "project", "")
@@ -358,6 +401,35 @@ def handle_get(route: str, qs: dict) -> tuple[int, dict | BinaryBody]:
         if res is None:
             return 404, {"error": "暂无运行结果，请先试跑"}
         return 200, res
+    if route == "/api/analyze_list":
+        project_id = _q(qs, "project", "")
+        paper_id = _q(qs, "paper_id", "")
+        if not project_id or not paper_id:
+            return 400, {"error": "需要 project 与 paper_id"}
+        try:
+            cfg = _project_cfg(project_id)
+        except ValueError as exc:
+            return 404, {"error": str(exc)}
+        dirs = result_analysis.run_dirs_for_paper(
+            ROOT, cfg, paper_id, run_id=_q(qs, "run_id")
+        )
+        return 200, {"analyses": result_analysis.list_analyses_under_runs(dirs)}
+    if route == "/api/analyze":
+        project_id = _q(qs, "project", "")
+        paper_id = _q(qs, "paper_id", "")
+        analysis_id = _q(qs, "analysis_id", "")
+        if not project_id or not paper_id or not analysis_id:
+            return 400, {"error": "需要 project、paper_id 与 analysis_id"}
+        try:
+            cfg = _project_cfg(project_id)
+        except ValueError as exc:
+            return 404, {"error": str(exc)}
+        found = result_analysis.find_analysis(
+            result_analysis.run_dirs_for_paper(ROOT, cfg, paper_id), analysis_id
+        )
+        if found is None:
+            return 404, {"error": "分析记录未找到"}
+        return 200, found
     if route == "/api/field_library":
         template = _q(qs, "template", "steel")
         return 200, config_model.load_field_library(ROOT, template)
@@ -471,6 +543,54 @@ def handle_post(route: str, body: dict, files: dict | None = None) -> tuple[int,
             payload["step"] = out.get("step")
             payload["invalidated"] = out.get("invalidated", [])
             return 200, payload
+
+        if route == "/api/analyze":
+            project_id = body.get("project") or ""
+            paper_id = body.get("paper_id") or ""
+            analysis_type = body.get("analysis_type") or ""
+            if not project_id or not paper_id:
+                return 400, {"error": "需要 project 与 paper_id"}
+            if analysis_type not in ("vs_source", "vs_runs"):
+                return 400, {"error": "analysis_type 须为 vs_source 或 vs_runs"}
+            try:
+                cfg = _project_cfg(project_id)
+            except ValueError as exc:
+                return 404, {"error": str(exc)}
+            try:
+                out = result_analysis.run_analysis(
+                    root=ROOT,
+                    project_cfg=cfg,
+                    project_id=project_id,
+                    paper_id=paper_id,
+                    analysis_type=analysis_type,
+                    run_id=body.get("run_id") or None,
+                    run_id_a=body.get("run_id_a") or None,
+                    run_id_b=body.get("run_id_b") or None,
+                    model_id=body.get("model_id") or None,
+                )
+            except ValueError as exc:
+                return 400, {"error": str(exc)}
+            except FileNotFoundError as exc:
+                return 404, {"error": str(exc)}
+            return 200, out
+
+        if route == "/api/run_delete":
+            project_id = body.get("project") or ""
+            paper_id = body.get("paper_id") or ""
+            run_id = body.get("run_id") or ""
+            if not project_id or not paper_id or not run_id:
+                return 400, {"error": "需要 project、paper_id 与 run_id"}
+            try:
+                cfg = _project_cfg(project_id)
+            except ValueError as exc:
+                return 404, {"error": str(exc)}
+            try:
+                out = pipeline.delete_run(ROOT, cfg, paper_id, run_id)
+            except ValueError as exc:
+                return 400, {"error": str(exc)}
+            except FileNotFoundError as exc:
+                return 404, {"error": str(exc)}
+            return 200, out
 
         if route == "/api/reextract":
             out = pipeline.reextract_field(
@@ -681,7 +801,7 @@ def parse_only(args) -> int:
     result = _ensure_source_and_parse(
         args.project,
         pdf_path=args.pdf,
-        paper_id=None if args.paper_id == "demo_steel_2024" else args.paper_id,
+        paper_id=args.paper_id,
         overwrite=args.overwrite_parse,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -724,7 +844,7 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--run-once", action="store_true", help="命令行试跑一篇，不启动服务")
     parser.add_argument("--project", default="demo_steel")
-    parser.add_argument("--paper-id", default="demo_steel_2024")
+    parser.add_argument("--paper-id", default=None)
     parser.add_argument("--mode", default="two_stage",
                         choices=["two_stage", "entity_only", "single_pass"])
     parser.add_argument("--partition", default="test", choices=["test", "data"])
@@ -744,8 +864,12 @@ def main() -> int:
     if args.reextract_field:
         return reextract_cli(args)
     if args.step:
+        if not args.paper_id:
+            parser.error("--step 需要 --paper-id")
         return run_step_cli(args)
     if args.run_once:
+        if not args.paper_id:
+            parser.error("--run-once 需要 --paper-id")
         return run_once(args)
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)

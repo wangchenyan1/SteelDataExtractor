@@ -12,3 +12,12 @@ def test_field_library():
     status, data = handle_get("/api/field_library", {"template": ["steel"]})
     assert status == 200
     assert data["fields"]
+
+
+def test_projects_payload_includes_document_kind():
+    status, data = handle_get("/api/projects", {})
+    assert status == 200
+    demo = data["projects"]["demo_steel"]
+    assert demo["document_kind"] == "paper"
+    cuti = data["projects"]["cuti"]
+    assert cuti["document_kind"] == "paper"

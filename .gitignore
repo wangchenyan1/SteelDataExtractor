@@ -1,7 +1,11 @@
-test_runs/
+/test_runs/
+/parsed_results/
+/.superpowers/
 __pycache__/
 *.pyc
 .env
+.env.*
 .worktrees/
 *.egg-info/
 .pytest_cache/
+.DS_Store

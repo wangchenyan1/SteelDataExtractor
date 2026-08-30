@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>材料文献抽取工作台 Demo</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=20260830_run_delete" />
   </head>
   <body>
     <header class="topbar">
@@ -36,19 +36,26 @@
           <h2>运行进度</h2>
           <ol class="steps" id="stepList"></ol>
         </section>
+        <section data-view-panel="review export">
+          <h2>已抽取</h2>
+          <div class="extracted-paper-list" id="extractedPaperList"></div>
+        </section>
       </aside>
 
       <section class="content">
         <section class="intro" data-view-panel="project">
           <div>
-            <h2 id="projectTitle">核聚变低磁奥氏体钢</h2>
+            <div class="project-title-row">
+              <h2 id="projectTitle">核聚变低磁奥氏体钢</h2>
+              <span id="projectKindBadge" class="kind-badge">文献</span>
+            </div>
             <p id="projectDesc"></p>
           </div>
         </section>
 
         <section class="intro" data-view-panel="papers">
           <div class="run-actions" id="runActions">
-            <button class="primary" id="btnRunAll">整篇一次跑完</button>
+            <button class="primary" id="btnRunAll">整篇跑当前</button>
             <button class="primary" id="btnRunStep">跑当前阶段</button>
             <button class="ghost" id="btnParseOnly">只解析</button>
             <button class="primary" id="btnGoReview" hidden>去复核</button>
@@ -87,41 +94,72 @@
 
         <section class="panel" data-view-panel="papers">
           <div class="panel-title">
-            <h3>文献输入</h3>
-            <span class="mode-hint">使用已有 parsed_results/paper.md，或提供 PDF 路径解析</span>
+            <h3>文献</h3>
+            <span id="papersKindBadge" class="kind-badge">文献</span>
+            <span class="mode-hint">多选 PDF 导入解析，勾选后批量抽取</span>
           </div>
-          <div class="paper-config">
-            <label>
-              已有 paper_id
-              <select id="paperSelect"></select>
-            </label>
-            <label>
-              或手动输入 paper_id
-              <input id="paperIdInput" placeholder="例如 10.1016_j.fusengdes.2014.10.006" />
-            </label>
-            <label>
-              PDF 路径（只解析 / 无 md 时）
-              <input id="pdfPathInput" placeholder="可选：本地 PDF 绝对路径" />
-            </label>
-            <label>
-              抽取模式
-              <select id="extractMode">
-                <option value="two_stage">两阶段：框架 + 性质</option>
-                <option value="entity_only">只抽框架</option>
-                <option value="single_pass">单次抽取（高级对照）</option>
-              </select>
-            </label>
-            <label>
-              输出分区
-              <select id="outputPartition">
-                <option value="test">测试：test_runs/项目/test</option>
-                <option value="data">正式：test_runs/项目/data</option>
-              </select>
-            </label>
-            <button id="usePaperBtn" class="ghost">使用该文献</button>
+          <div id="paperUploadBar" class="paper-upload-bar">
+            <input id="pdfFileInput" type="file" accept=".pdf" multiple />
+            <button type="button" id="btnImportPdfs" class="primary">导入并解析</button>
           </div>
-          <pre id="paperRunPreview" class="run-preview"></pre>
-          <div id="runStatus" class="run-status">启动后端后，在此选择文献并按项目阶段运行抽取。</div>
+          <div id="importProgress" class="import-progress"></div>
+          <div class="paper-table-toolbar">
+            <button type="button" id="btnRunSelected" class="primary">抽取所选</button>
+          </div>
+          <div class="paper-table-wrap">
+            <table id="paperTable" class="paper-list-table">
+              <thead>
+                <tr>
+                  <th>
+                    <label class="check-item">
+                      <input type="checkbox" id="paperSelectAll" /> 全选已解析
+                    </label>
+                  </th>
+                  <th>文献</th>
+                  <th>解析</th>
+                  <th>抽取</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <details class="advanced">
+            <summary>高级：路径导入 / paper_id / 模式预览</summary>
+            <div class="paper-config">
+              <label>
+                已有 paper_id
+                <select id="paperSelect"></select>
+              </label>
+              <label>
+                或手动输入 paper_id
+                <input id="paperIdInput" placeholder="例如 10.1016_j.fusengdes.2014.10.006" />
+              </label>
+              <label>
+                PDF 路径（只解析 / 无 md 时）
+                <input id="pdfPathInput" placeholder="可选：本地 PDF 绝对路径" />
+              </label>
+              <label>
+                抽取模式
+                <select id="extractMode">
+                  <option value="two_stage">完整流程（跑当前全部步骤 + 校验）</option>
+                  <option value="entity_only">只抽骨架</option>
+                  <option value="single_pass">对照：一次抽完（少做校验/图片过滤）</option>
+                </select>
+                <span class="mode-hint">完整流程按项目配置的全部抽取步骤执行，不限于两步。</span>
+              </label>
+              <label>
+                输出分区
+                <select id="outputPartition">
+                  <option value="test">测试：test_runs/项目/test</option>
+                  <option value="data">正式：test_runs/项目/data</option>
+                </select>
+              </label>
+              <button id="usePaperBtn" class="ghost">使用该文献</button>
+            </div>
+            <pre id="paperRunPreview" class="run-preview"></pre>
+          </details>
+          <div id="runStatus" class="run-status">启动后端后，上传或选择文献并按项目阶段运行抽取。</div>
         </section>
 
         <section class="panel review-workbench" data-view-panel="review">
@@ -138,34 +176,84 @@
                 <option value="">自动选择最新结果</option>
               </select>
             </label>
+            <button type="button" id="btnDeleteRun" class="ghost danger">删除所选结果</button>
+            <span class="mode-hint" id="deleteRunStatus"></span>
           </div>
+          <div class="run-compare-bar">
+            <span class="run-compare-title">双 run 对比</span>
+            <label>
+              Run A
+              <select id="compareRunA">
+                <option value="">选择 run</option>
+              </select>
+            </label>
+            <label>
+              Run B
+              <select id="compareRunB">
+                <option value="">选择 run</option>
+              </select>
+            </label>
+            <label class="check-item">
+              <input type="checkbox" id="compareShowSame" /> 显示相同项
+            </label>
+            <button type="button" id="btnCompareRuns" class="ghost">对比</button>
+            <span class="mode-hint" id="compareStatus"></span>
+          </div>
+          <div id="runComparePanel" class="run-compare-panel" hidden></div>
+          <div class="run-analyze-bar">
+            <span class="run-compare-title">分析结果</span>
+            <label>
+              分析类型
+              <select id="analyzeType">
+                <option value="vs_source">结果 vs 原文</option>
+                <option value="vs_runs">Run 对比</option>
+              </select>
+            </label>
+            <button type="button" id="btnStartAnalyze" class="ghost">开始分析</button>
+            <label>
+              历史分析
+              <select id="analyzeHistory">
+                <option value="">暂无记录</option>
+              </select>
+            </label>
+            <span class="mode-hint" id="analyzeStatus"></span>
+          </div>
+          <p class="mode-hint analyze-hint">只检查三类问题：数值是否准确且挂对样品/状态、工艺是否对应、图片判断是否准确。不写长篇综述。</p>
+          <div id="analyzePanel" class="run-analyze-panel" hidden></div>
           <div class="review-split">
             <article class="source-pane">
-              <div class="pane-title">
-                <h4>原文 / PDF</h4>
-                <div class="source-mode-tabs" id="sourceModeTabs">
-                  <button type="button" class="ghost tiny" data-source-mode="pdf" id="btnSourcePdf" hidden>PDF</button>
-                  <button type="button" class="ghost tiny" data-source-mode="html" id="btnSourceHtml" hidden>渲染</button>
-                  <button type="button" class="ghost tiny" data-source-mode="text" id="btnSourceText">文本</button>
+              <div class="pane-chrome">
+                <div class="pane-title">
+                  <h4>原文 / PDF</h4>
+                  <div class="source-mode-tabs" id="sourceModeTabs">
+                    <button type="button" class="ghost tiny" data-source-mode="pdf" id="btnSourcePdf" hidden>PDF</button>
+                    <button type="button" class="ghost tiny" data-source-mode="html" id="btnSourceHtml" hidden>渲染</button>
+                    <button type="button" class="ghost tiny" data-source-mode="text" id="btnSourceText">文本</button>
+                  </div>
+                  <span id="sourceMeta">尚未载入</span>
                 </div>
-                <span id="sourceMeta">尚未载入</span>
               </div>
-              <iframe id="pdfViewer" title="原文 PDF" hidden></iframe>
-              <article id="paperHtmlViewer" class="paper-html-viewer" hidden></article>
-              <pre id="paperTextViewer" class="paper-viewer" hidden>选择文献后点击“载入原文和最新结果”。有 PDF 时优先显示 PDF；否则渲染完整 paper.md（含插图）。</pre>
+              <div class="review-scroll">
+                <iframe id="pdfViewer" title="原文 PDF" hidden></iframe>
+                <article id="paperHtmlViewer" class="paper-html-viewer" hidden></article>
+                <pre id="paperTextViewer" class="paper-viewer" hidden>选择文献后点击“载入原文和最新结果”。有 PDF 时优先显示 PDF；否则渲染完整 paper.md（含插图）。</pre>
+              </div>
             </article>
             <article class="result-pane">
-              <div class="pane-title">
-                <h4>抽取结果 / Review</h4>
-                <span id="resultMeta">尚未载入</span>
+              <div class="pane-chrome">
+                <div class="pane-title">
+                  <h4>抽取结果 / Review</h4>
+                  <div class="result-filter" id="resultFilter">
+                    <label class="radio-inline"><input type="radio" name="reviewFilter" value="all" checked /> 全部</label>
+                    <label class="radio-inline"><input type="radio" name="reviewFilter" value="rejected" /> 仅未通过</label>
+                  </div>
+                  <span id="resultMeta">尚未载入</span>
+                </div>
+                <div class="result-summary" id="resultSummary"></div>
               </div>
-              <div class="result-filter" id="resultFilter">
-                <label class="radio-inline"><input type="radio" name="reviewFilter" value="all" checked /> 全部</label>
-                <label class="radio-inline"><input type="radio" name="reviewFilter" value="rejected" /> 仅未通过</label>
+              <div class="review-scroll">
+                <div id="resultFieldList" class="result-tree"></div>
               </div>
-              <div class="result-summary" id="resultSummary"></div>
-              <div id="resultFieldList" class="result-tree"></div>
-              <div id="resultReviewList" class="review-list"></div>
             </article>
           </div>
         </section>
@@ -182,6 +270,28 @@
             <div id="fieldLibraryPanel" class="field-library-panel">
               <p class="mode-hint">从公共字段库按类别勾选要抽取的字段；已勾选字段旁可改规则。</p>
               <div id="fieldLibraryChecks" class="field-library-checks"></div>
+            </div>
+
+            <div class="config-section">
+              <div class="panel-title">
+                <h3>性能大类</h3>
+                <button id="btnAddPropertyGroup" class="ghost" type="button">添加性能大类</button>
+              </div>
+              <p class="mode-hint">模板大类不可删；自建大类写入草稿，与字段/阶段一起「保存配置」落盘。</p>
+              <div id="propertyGroupList" class="property-group-list"></div>
+            </div>
+
+            <div class="config-section">
+              <div class="panel-title">
+                <h3>文档类型</h3>
+              </div>
+              <p class="mode-hint">只影响送入模型前的文本剪裁，不改字段和阶段。专利会去掉摘要、技术领域、背景和权利要求，从实施方式/实施例起保留。</p>
+              <label>文档类型
+                <select id="documentKind">
+                  <option value="paper">学术文献</option>
+                  <option value="patent">专利</option>
+                </select>
+              </label>
             </div>
 
             <div class="config-section">
@@ -211,18 +321,18 @@
                 </article>
                 <article class="strategy-card">
                   <h4>图片策略</h4>
-                  <p class="mode-hint">如只关注组织形貌；XRD/曲线等标为未通过，仍出现在结果树中便于复核。</p>
-                  <label>保留类型 keep_types（逗号分隔）
-                    <textarea id="strategyKeepTypes" rows="2" placeholder="OM, SEM, TEM, EBSD"></textarea>
-                  </label>
-                  <label>丢弃类型 drop_types（逗号分隔）
-                    <textarea id="strategyDropTypes" rows="2" placeholder="XRD, schematic, other"></textarea>
+                  <p class="mode-hint">只按下方两个布尔字段过滤；figure_type 仅展示，不做类型白名单硬过滤。未通过的图仍出现在结果树中便于复核。</p>
+                  <label class="check-item">
+                    <input type="checkbox" id="strategyRequireMicro" /> 要求组织图（is_microstructure_image=true）
                   </label>
                   <label class="check-item">
-                    <input type="checkbox" id="strategyRequireMicro" /> 要求组织图（is_microstructure_image）
+                    <input type="checkbox" id="strategyDropPostTest" /> 丢弃断后图（is_post_test_image=true）
                   </label>
-                  <label class="check-item">
-                    <input type="checkbox" id="strategyDropPostTest" /> 丢弃断后/post-test 图
+                  <label class="mode-hint" style="display:block;margin-top:8px">类型备注（可选，当前不参与过滤）
+                    <textarea id="strategyKeepTypes" rows="2" placeholder="OM, SEM, TEM, EBSD（仅备注）"></textarea>
+                  </label>
+                  <label class="mode-hint" style="display:block">
+                    <textarea id="strategyDropTypes" rows="2" placeholder="XRD, schematic（仅备注）" hidden></textarea>
                   </label>
                 </article>
               </div>
@@ -353,7 +463,7 @@
           </section>
 
           <section class="panel">
-            <h3>只读快照 · 真实输出样例</h3>
+            <h3>历史输出样例</h3>
             <div id="snapshotPapers" class="paper-table"></div>
           </section>
         </div>
@@ -364,34 +474,44 @@
       <form method="dialog" class="dialog-body">
         <h3>新增抽取字段（私有）</h3>
         <label>
-          字段名
-          <input id="fieldName" value="impact_toughness" />
+          中文名（必填）
+          <input id="fieldLabel" placeholder="如：疲劳极限" />
         </label>
         <label>
-          层级
+          内部 id（可选）
+          <input id="fieldName" placeholder="留空则按中文名自动生成" />
+        </label>
+        <label>
+          类别
           <select id="fieldLevel">
             <option value="metadata">文章字段</option>
-            <option value="property">性质字段</option>
+            <option value="property" selected>性能字段</option>
             <option value="condition">状态字段</option>
             <option value="sample">样品字段</option>
             <option value="figure">图片字段</option>
           </select>
         </label>
+        <label id="fieldGroupWrap">
+          性能大类（性能必选）
+          <select id="fieldGroup">
+            <option value="">请选择大类</option>
+          </select>
+        </label>
         <label>
           抽取规则
-          <input id="fieldRule" value="抽取 Charpy impact toughness / impact energy 字段" />
+          <input id="fieldRule" value="" />
         </label>
         <label>
           正例
-          <input id="positiveExamples" value="Charpy, impact energy, impact toughness" />
+          <input id="positiveExamples" value="" />
         </label>
         <label>
           反例
-          <input id="negativeExamples" value="fracture toughness, KIC, JIC" />
+          <input id="negativeExamples" value="" />
         </label>
         <div class="dialog-actions">
           <button value="cancel" class="ghost">取消</button>
-          <button id="saveField" value="default" class="primary">加入当前项目</button>
+          <button id="saveField" type="button" class="primary">加入当前项目</button>
         </div>
       </form>
     </dialog>
@@ -471,6 +591,6 @@
 
     <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
     <script src="./readonly_snapshot.js?v=20260828_task9"></script>
-    <script src="./app.js?v=20260828_task9"></script>
+    <script src="./app.js?v=20260830_run_delete"></script>
   </body>
 </html>

@@ -50,7 +50,7 @@ unmatched_properties
 - 导出：项目配置（含阶段）与抽取结果；结果可选 `include_rejected`
 - 四个 CLI/API 入口：整篇、分阶段、只解析、单字段重抽
 - 三层配置：模板 + 公共字段库 + 项目覆盖层
-- `demo_steel` 用 mock 后端离线可跑；不写回 `Extract_data`
+- `demo_steel` 走真实多模态后端；不写回 `Extract_data`
 
 ## 测试结果保存策略
 

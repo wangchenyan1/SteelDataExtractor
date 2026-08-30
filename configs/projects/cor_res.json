@@ -1,0 +1,337 @@
+{
+  "template_id": "steel",
+  "selected_field_ids": [
+    "title",
+    "doi",
+    "material_system",
+    "sample_name",
+    "product_form",
+    "composition",
+    "base_processing_description",
+    "sample_processing_overview",
+    "sample_microstructure_overview",
+    "sample_id",
+    "composition_unit",
+    "condition_name",
+    "condition_type",
+    "condition_processing_description",
+    "microstructure",
+    "condition_id",
+    "rolling_processing",
+    "yield_strength",
+    "tensile_strength",
+    "elongation",
+    "hardness",
+    "reduction_of_area",
+    "impact_toughness",
+    "microhardness",
+    "figure_id",
+    "placeholder_index",
+    "figure_type",
+    "is_microstructure_image",
+    "is_post_test_image",
+    "caption",
+    "scale_bar_info",
+    "image_purpose"
+  ],
+  "private_fields": [
+    {
+      "id": "doi",
+      "label": "DOI",
+      "category": "metadata",
+      "group": null,
+      "value_type": "string",
+      "rule": "",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": ""
+    },
+    {
+      "id": "sample_processing_overview",
+      "label": "样品工艺概述",
+      "category": "sample",
+      "group": null,
+      "value_type": "string",
+      "rule": "sample_processing_overview：以固定格式提取样品整体工艺关键参数，减少冗余修饰词\n必须包含的要素（如论文中有）：钢号/材料名、钢种大类、热处理状态、关键温度与时间、加工状态、状态短语\nsample_microstructure_overview：以固定格式提取样品整体组织关键特征，减少冗余修饰词\n必须包含的要素（如论文中有）：相组成、残余奥氏体分数、晶粒尺寸、析出相及尺寸、组织形貌\n两个字段控制在 ≤200 字符",
+      "positive_examples": "例如：\"AISI 4140, 低合金钢, quenched + tempered, austenitized at 860°C for 1h, tempered at 550°C for 2h, hot rolled\"\n例如：\"tempered martensite + retained austenite (5.2%), prior austenite grain size ~20 μm, (Nb,Mo)C precipitates ~5-10 nm, lath morphology\"",
+      "negative_examples": "显微手段（OM/SEM/TEM/EPMA）仅作弱信息标注，不要过度拟合设备名称",
+      "note": "来自规则：sample_processing_overview 与 sample_microstructure_overview（样品级概述）"
+    },
+    {
+      "id": "sample_microstructure_overview",
+      "label": "样品组织概述",
+      "category": "sample",
+      "group": null,
+      "value_type": "string",
+      "rule": "sample_processing_overview：以固定格式提取样品整体工艺关键参数，减少冗余修饰词\n必须包含的要素（如论文中有）：钢号/材料名、钢种大类、热处理状态、关键温度与时间、加工状态、状态短语\nsample_microstructure_overview：以固定格式提取样品整体组织关键特征，减少冗余修饰词\n必须包含的要素（如论文中有）：相组成、残余奥氏体分数、晶粒尺寸、析出相及尺寸、组织形貌\n两个字段控制在 ≤200 字符",
+      "positive_examples": "例如：\"AISI 4140, 低合金钢, quenched + tempered, austenitized at 860°C for 1h, tempered at 550°C for 2h, hot rolled\"\n例如：\"tempered martensite + retained austenite (5.2%), prior austenite grain size ~20 μm, (Nb,Mo)C precipitates ~5-10 nm, lath morphology\"",
+      "negative_examples": "显微手段（OM/SEM/TEM/EPMA）仅作弱信息标注，不要过度拟合设备名称",
+      "note": "来自规则：sample_processing_overview 与 sample_microstructure_overview（样品级概述）"
+    },
+    {
+      "id": "composition_unit",
+      "label": "成分单位",
+      "category": "sample",
+      "group": null,
+      "value_type": "string",
+      "rule": "字段定义：wt.%",
+      "positive_examples": "",
+      "negative_examples": "composition 只填写论文成分表、正文或图表中**明确给出的元素和值**，不要为了凑字段补全元素\n**必须按列头/元素符号一一对应取值**；严禁因某格为空就把右侧或下一列数值挪到当前元素\n单元格为 `N.d.` / `n.d.` / `n.d` / `ND` / `n/a` / `—` / `-` / 空白 / `not detected` 时：\n**直接省略该元素**，不要填 `N.d.`，更不要用相邻列的数值顶替\n尤其常见错误：C 为未检出时把 Si 值误写入 C、再把 Si 标成 `N.d.` —— 必须避免\n微量元素（N、O、S、P、B、Ti、Nb、V、Al 等）只要原文对该样品明确给出数值，就必须抽取，不要漏提\n严禁默认添加 `\"Fe\": \"bal.\"`；只有原文明确写出 `Fe balance`、`Fe bal.`、`balance Fe`、`rest Fe`、`remainder Fe` 等含义时，才可以填写 Fe 为 `bal.`\n某元素未在原文成分中明确出现时，直接省略该元素，不要填 `0`、`unknown`、`not reported` 或示例值",
+      "note": "来自规则：化学成分抽取（极其重要：按表头映射，禁止列错位）"
+    },
+    {
+      "id": "microstructure",
+      "label": "显微组织",
+      "category": "condition",
+      "group": null,
+      "value_type": "string",
+      "rule": "sample_processing_overview：以固定格式提取样品整体工艺关键参数，减少冗余修饰词\n必须包含的要素（如论文中有）：钢号/材料名、钢种大类、热处理状态、关键温度与时间、加工状态、状态短语\nsample_microstructure_overview：以固定格式提取样品整体组织关键特征，减少冗余修饰词\n必须包含的要素（如论文中有）：相组成、残余奥氏体分数、晶粒尺寸、析出相及尺寸、组织形貌\n两个字段控制在 ≤200 字符",
+      "positive_examples": "例如：\"AISI 4140, 低合金钢, quenched + tempered, austenitized at 860°C for 1h, tempered at 550°C for 2h, hot rolled\"\n例如：\"tempered martensite + retained austenite (5.2%), prior austenite grain size ~20 μm, (Nb,Mo)C precipitates ~5-10 nm, lath morphology\"",
+      "negative_examples": "显微手段（OM/SEM/TEM/EPMA）仅作弱信息标注，不要过度拟合设备名称",
+      "note": "来自规则：sample_processing_overview 与 sample_microstructure_overview（样品级概述）"
+    },
+    {
+      "id": "rolling_processing",
+      "label": "轧制工艺",
+      "category": "condition",
+      "group": null,
+      "value_type": "string",
+      "rule": "5 项：\"heating_temperature\"（加热/再加热温度）、\"start_rolling_temperature\"（开轧温度）、\"finish_rolling_temperature\"（终轧/精轧温度）、\"reduction_ratio\"（总压下率/累计压下率，单位 % 或道次记 pass 时换算）、\"cooling_rate\"（轧后冷却速率 / 控冷速率）",
+      "positive_examples": "",
+      "negative_examples": "论文中没明确给出的字段：**留空对象 {} 或省略**，不要瞎编\n若某 condition 是 ST 固溶/退火态，没有轧制信息：rolling_processing 可整体省略",
+      "note": "来自规则：rolling_processing（轧制工艺）规则"
+    },
+    {
+      "id": "reduction_of_area",
+      "label": "断面收缩率",
+      "category": "property",
+      "group": "mechanical_properties",
+      "value_type": "number_with_unit",
+      "rule": "",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": ""
+    },
+    {
+      "id": "microhardness",
+      "label": "显微硬度",
+      "category": "property",
+      "group": "mechanical_properties",
+      "value_type": "number_with_unit",
+      "rule": "",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": ""
+    },
+    {
+      "id": "caption",
+      "label": "图注",
+      "category": "figure",
+      "group": null,
+      "value_type": "string",
+      "rule": "字段定义：图片标题（≤80 字符）\nOM = 光学显微（optical micrograph，通常有颜色或灰度晶界）\nSEM = 扫描电镜（高分辨灰度组织/断口/腐蚀形貌）\nTEM = 透射电镜（黑白衍衬像，含位错、析出相、SAED）\nEBSD = 反极图/取向图（彩色 IPF）\nXRD = X射线衍射图（曲线图，有 2θ 横坐标）\nEDS = 能谱分析（元素分布图/谱线）\npolarization_curve = 极化曲线（电化学极化测试结果）\nEIS = 电化学阻抗谱（Nyquist 图/Bode 图）\n`is_microstructure_image` 表示是否为**显微形貌类图像**，与是否测试后**解耦**：",
+      "positive_examples": "",
+      "negative_examples": "因此：断口 SEM、腐蚀形貌 SEM/OM **通常**为 `is_microstructure_image=true` 且 `is_post_test_image=true`（不要因为是断口/腐蚀形貌就设 micro=false）",
+      "note": "来自规则：图片类型判定（看图本身 + 看 caption）\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）"
+    },
+    {
+      "id": "image_purpose",
+      "label": "图片用途",
+      "category": "figure",
+      "group": null,
+      "value_type": "string",
+      "rule": "OM = 光学显微（optical micrograph，通常有颜色或灰度晶界）\nSEM = 扫描电镜（高分辨灰度组织/断口/腐蚀形貌）\nTEM = 透射电镜（黑白衍衬像，含位错、析出相、SAED）\nEBSD = 反极图/取向图（彩色 IPF）\nXRD = X射线衍射图（曲线图，有 2θ 横坐标）\nEDS = 能谱分析（元素分布图/谱线）\npolarization_curve = 极化曲线（电化学极化测试结果）\nEIS = 电化学阻抗谱（Nyquist 图/Bode 图）\n`is_microstructure_image` 表示是否为**显微形貌类图像**，与是否测试后**解耦**：\n`true`：OM / SEM / TEM / EBSD 等显微图，包括测试前组织、断口形貌、腐蚀形貌、磨损形貌等",
+      "positive_examples": "",
+      "negative_examples": "因此：断口 SEM、腐蚀形貌 SEM/OM **通常**为 `is_microstructure_image=true` 且 `is_post_test_image=true`（不要因为是断口/腐蚀形貌就设 micro=false）\n不确定时使用 [\"other\"]，不要强行归类",
+      "note": "来自规则：图片类型判定（看图本身 + 看 caption）\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）\n来自规则：image_purpose 标注规则"
+    }
+  ],
+  "field_overrides": {
+    "title": {
+      "rule": "字段定义：...",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。"
+    },
+    "material_system": {
+      "rule": "字段定义：钢种/合金体系简短描述（如 Nb-Mo HSLA steel, 4Mn medium-Mn TRIP steel）",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。"
+    },
+    "sample_name": {
+      "rule": "字段定义：论文中样品的原始命名（如 Nb-Ti steel, Nb-Mo steel, low carbon steel）\n样品（sample）= 论文中**化学成分独特**或**初始工艺/材料角色独特**的材料实体\n同一样品的不同热处理态/不同退火温度/不同冷却条件/不同腐蚀暴露时长 → 属于 **conditions**，不是新样品\n**必须拆成多个样品**的常见情形（成分不同或材料角色不同）：\n名义成分不同的钢种/合金牌号\n焊缝金属 vs 母材、堆焊层 vs 基体、涂层 vs 基体、焊丝/填充金属 vs 母材\n对比用的对照钢 / 商用钢 / 异种材料（只要成分表或正文给出独立成分）",
+      "positive_examples": "例如：同一 18Mn 钢的 HR / ST1050 / ST1100 / ST1150 = **1 个样品 + 4 个 conditions**\n例如：Mn 含量不同的 13Mn / 18Mn / 23Mn = 3 个样品",
+      "negative_examples": "",
+      "note": "来自规则：样品识别（极其重要）"
+    },
+    "product_form": {
+      "rule": "字段定义：plate | sheet | bar | rod | rebar | wire | pipe | tube | angle_steel | pin | forging | casting | powder | bulk | target | other \n推断优先级：论文明确声明 > 实验描述暗示 > 默认 other\n常见对应：plate(板材/薄板), bar(棒材/圆棒), rebar(钢筋), wire(线材), pipe(管材), angle_steel(角钢), pin(销轴), forging(锻件), casting(铸件), powder(粉末), bulk(块体), target(靶材)",
+      "positive_examples": "",
+      "negative_examples": "必须从枚举值中选择，**禁止自创类别**\n无法确定 → other",
+      "note": "来自规则：product_form 填写规则"
+    },
+    "composition": {
+      "rule": "composition 只填写论文成分表、正文或图表中**明确给出的元素和值**，不要为了凑字段补全元素",
+      "positive_examples": "",
+      "negative_examples": "**必须按列头/元素符号一一对应取值**；严禁因某格为空就把右侧或下一列数值挪到当前元素\n单元格为 `N.d.` / `n.d.` / `n.d` / `ND` / `n/a` / `—` / `-` / 空白 / `not detected` 时：\n**直接省略该元素**，不要填 `N.d.`，更不要用相邻列的数值顶替\n尤其常见错误：C 为未检出时把 Si 值误写入 C、再把 Si 标成 `N.d.` —— 必须避免\n微量元素（N、O、S、P、B、Ti、Nb、V、Al 等）只要原文对该样品明确给出数值，就必须抽取，不要漏提\n严禁默认添加 `\"Fe\": \"bal.\"`；只有原文明确写出 `Fe balance`、`Fe bal.`、`balance Fe`、`rest Fe`、`remainder Fe` 等含义时，才可以填写 Fe 为 `bal.`\n某元素未在原文成分中明确出现时，直接省略该元素，不要填 `0`、`unknown`、`not reported` 或示例值",
+      "note": "来自规则：化学成分抽取（极其重要：按表头映射，禁止列错位）"
+    },
+    "base_processing_description": {
+      "rule": "字段定义：样品级公共工艺（冶炼、锻造等所有 condition 共享部分）",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自真实 01_extract.py 字段定义。"
+    },
+    "sample_id": {
+      "rule": "字段定义：S1\n必须从 caption 或正文中明确判断每张图属于哪个 sample 和 condition\ncaption 中提到 \"(a) sample X, (b) sample Y\" → panel a/b 分别对应不同 sample\n多 panel 图为每个 panel 输出独立 figures 条目（figure_id=\"Figure 1a\"、\"Figure 1b\" 等）",
+      "positive_examples": "",
+      "negative_examples": "无法判断归属时：sample_id = null",
+      "note": "来自规则：Figure → Sample 映射"
+    },
+    "condition_name": {
+      "rule": "字段定义：条件名（极简代号，如 HR, ST1100, A900-15min, as-rolled）\n`condition_name` **必须用论文中给该条件起的简短代号**：A700、A720、TP000、HR、as-rolled、14d、28d 等\n同一工艺/暴露代号若分别作用于多个 sample，应输出多条 condition（不同 `condition_id` + 各自 `sample_id`），`condition_name` 可相同",
+      "positive_examples": "反例：❌ condition_name = \"A720 (intercritically annealed at 720°C for 60min)\"\n正例：✅ condition_name = \"A720\"",
+      "negative_examples": "`condition_id` 在**整篇论文内必须唯一**（C1、C2、C3… 不重复）；不同 sample 的条件也不能共用同一个 `condition_id`\n**不要在 condition_name 中堆砌完整工艺描述**",
+      "note": "来自规则：condition_id / condition_name（极其重要）"
+    },
+    "condition_type": {
+      "rule": "字段定义：processing_condition | microstructure_condition | mechanical_test_condition | corrosion_test_condition | post_test_condition\n`processing_condition`: 不同工艺态（退火/淬火/回火/轧制等）\n`microstructure_condition`: 仅描述组织态（如初始态 vs 退火态对比）\n`mechanical_test_condition`: 拉伸/Charpy/疲劳测试条件\n`corrosion_test_condition`: 以腐蚀试验参数区分的条件（盐雾时长、浸泡介质/时长、电化学测试工况等）\n`post_test_condition`: 断后样品（fractured sample, post-tensile, post-fatigue）或腐蚀后样品形貌条件",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自规则：condition_type 严格区分"
+    },
+    "condition_processing_description": {
+      "rule": "字段定义：该条件独有的工艺细节（如 solution treated at 1100°C for 30 min, water quenched）。必须随 condition 不同而不同！\nC1 (as-hot-rolled): \"Hot-rolled state, no further annealing\"\nC2 (A700): \"Intercritically annealed at 700°C for 60 min, air cooled\"\nC3 (A720): \"Intercritically annealed at 720°C for 60 min, air cooled\"\n样品级公共工艺（冶炼、锻造、热轧成材）放到 sample.base_processing_description",
+      "positive_examples": "每个 condition 必须有**自己独有的**工艺细节，例如：",
+      "negative_examples": "**绝对不要**让所有 condition 共享同一段含\"700/720/740/760°C\"的笼统工艺",
+      "note": "来自规则：condition_processing_description（极其重要：必须随 condition 变化）"
+    },
+    "condition_id": {
+      "rule": "字段定义：C1\n必须从 caption 或正文中明确判断每张图属于哪个 sample 和 condition\ncaption 中提到 \"(a) sample X, (b) sample Y\" → panel a/b 分别对应不同 sample\n多 panel 图为每个 panel 输出独立 figures 条目（figure_id=\"Figure 1a\"、\"Figure 1b\" 等）",
+      "positive_examples": "",
+      "negative_examples": "无法判断归属时：sample_id = null",
+      "note": "来自规则：Figure → Sample 映射"
+    },
+    "tensile_strength": {
+      "rule": "推断优先级：论文明确声明 > 实验描述暗示 > 默认 other\n常见对应：plate(板材/薄板), bar(棒材/圆棒), rebar(钢筋), wire(线材), pipe(管材), angle_steel(角钢), pin(销轴), forging(锻件), casting(铸件), powder(粉末), bulk(块体), target(靶材)",
+      "positive_examples": "",
+      "negative_examples": "必须从枚举值中选择，**禁止自创类别**\n无法确定 → other",
+      "note": "来自规则：product_form 填写规则"
+    },
+    "figure_id": {
+      "rule": "字段定义：Figure 1a\n必须从 caption 或正文中明确判断每张图属于哪个 sample 和 condition\ncaption 中提到 \"(a) sample X, (b) sample Y\" → panel a/b 分别对应不同 sample\n多 panel 图为每个 panel 输出独立 figures 条目（figure_id=\"Figure 1a\"、\"Figure 1b\" 等）",
+      "positive_examples": "",
+      "negative_examples": "无法判断归属时：sample_id = null",
+      "note": "来自规则：Figure → Sample 映射"
+    },
+    "placeholder_index": {
+      "rule": "必须与文本中的 [FIGURE_PLACEHOLDER_n] 编号一致",
+      "positive_examples": "",
+      "negative_examples": "",
+      "note": "来自规则：placeholder_index"
+    },
+    "figure_type": {
+      "rule": "字段定义：OM | SEM | TEM | EBSD | XRD | EDS | stress_strain_curve | polarization_curve | EIS | schematic | other\nOM = 光学显微（optical micrograph，通常有颜色或灰度晶界）\nSEM = 扫描电镜（高分辨灰度组织/断口/腐蚀形貌）\nTEM = 透射电镜（黑白衍衬像，含位错、析出相、SAED）\nEBSD = 反极图/取向图（彩色 IPF）\nXRD = X射线衍射图（曲线图，有 2θ 横坐标）\nEDS = 能谱分析（元素分布图/谱线）\npolarization_curve = 极化曲线（电化学极化测试结果）\nEIS = 电化学阻抗谱（Nyquist 图/Bode 图）\n`is_microstructure_image` 表示是否为**显微形貌类图像**，与是否测试后**解耦**：",
+      "positive_examples": "",
+      "negative_examples": "因此：断口 SEM、腐蚀形貌 SEM/OM **通常**为 `is_microstructure_image=true` 且 `is_post_test_image=true`（不要因为是断口/腐蚀形貌就设 micro=false）",
+      "note": "来自规则：图片类型判定（看图本身 + 看 caption）\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）"
+    },
+    "is_microstructure_image": {
+      "rule": "OM = 光学显微（optical micrograph，通常有颜色或灰度晶界）\nSEM = 扫描电镜（高分辨灰度组织/断口/腐蚀形貌）\nTEM = 透射电镜（黑白衍衬像，含位错、析出相、SAED）\nEBSD = 反极图/取向图（彩色 IPF）\nXRD = X射线衍射图（曲线图，有 2θ 横坐标）\nEDS = 能谱分析（元素分布图/谱线）\npolarization_curve = 极化曲线（电化学极化测试结果）\nEIS = 电化学阻抗谱（Nyquist 图/Bode 图）\n`is_microstructure_image` 表示是否为**显微形貌类图像**，与是否测试后**解耦**：\n`true`：OM / SEM / TEM / EBSD 等显微图，包括测试前组织、断口形貌、腐蚀形貌、磨损形貌等",
+      "positive_examples": "",
+      "negative_examples": "因此：断口 SEM、腐蚀形貌 SEM/OM **通常**为 `is_microstructure_image=true` 且 `is_post_test_image=true`（不要因为是断口/腐蚀形貌就设 micro=false）",
+      "note": "来自规则：图片类型判定（看图本身 + 看 caption）\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）"
+    },
+    "is_post_test_image": {
+      "rule": "OM = 光学显微（optical micrograph，通常有颜色或灰度晶界）\nSEM = 扫描电镜（高分辨灰度组织/断口/腐蚀形貌）\nTEM = 透射电镜（黑白衍衬像，含位错、析出相、SAED）\nEBSD = 反极图/取向图（彩色 IPF）\nXRD = X射线衍射图（曲线图，有 2θ 横坐标）\nEDS = 能谱分析（元素分布图/谱线）\npolarization_curve = 极化曲线（电化学极化测试结果）\nEIS = 电化学阻抗谱（Nyquist 图/Bode 图）\n`is_microstructure_image` 表示是否为**显微形貌类图像**，与是否测试后**解耦**：\n`true`：OM / SEM / TEM / EBSD 等显微图，包括测试前组织、断口形貌、腐蚀形貌、磨损形貌等",
+      "positive_examples": "",
+      "negative_examples": "因此：断口 SEM、腐蚀形貌 SEM/OM **通常**为 `is_microstructure_image=true` 且 `is_post_test_image=true`（不要因为是断口/腐蚀形貌就设 micro=false）",
+      "note": "来自规则：图片类型判定（看图本身 + 看 caption）\n来自规则：is_microstructure_image 与 is_post_test_image（极其重要）"
+    },
+    "scale_bar_info": {
+      "rule": "对所有显微图片（组织图、腐蚀形貌图、断口图等），必须尝试从图片上提取比例尺标注\n如图片上确实没有比例尺标注（如曲线图、示意图），填 null\n注意区分比例尺（scale bar）和标尺文字，优先提取图片右下角/左下角的标注",
+      "positive_examples": "常见格式：50 μm、200 nm、1 mm、500 nm、10 μm 等",
+      "negative_examples": "",
+      "note": "来自规则：scale_bar_info（组织/形貌图比例尺提取）"
+    }
+  },
+  "steps": [
+    {
+      "id": "entity",
+      "type": "entity",
+      "name": "Stage1 · 样品-状态骨架"
+    },
+    {
+      "id": "mechanical",
+      "type": "property",
+      "name": "Stage2a · 力学性能",
+      "group": "mechanical_properties",
+      "fields": [
+        "yield_strength",
+        "tensile_strength",
+        "elongation",
+        "hardness",
+        "reduction_of_area",
+        "microhardness"
+      ]
+    },
+    {
+      "id": "impact",
+      "type": "property",
+      "name": "Stage2b · 冲击性能",
+      "group": "impact_properties",
+      "fields": [
+        "impact_toughness"
+      ]
+    }
+  ],
+  "property_source": {
+    "allow": [
+      "measured_table",
+      "measured_text",
+      "example_table"
+    ],
+    "deny": [
+      "abstract_target",
+      "claim_range",
+      "generalized_threshold",
+      "figure_ocr",
+      "curve_estimate"
+    ],
+    "deny_phrase_patterns": [
+      "above",
+      "below",
+      "target",
+      "at least",
+      "no less than",
+      "以上",
+      "以下",
+      "不低于",
+      "目标",
+      "优选"
+    ]
+  },
+  "figure_filter": {
+    "keep_types": [
+      "OM",
+      "SEM",
+      "TEM",
+      "EBSD"
+    ],
+    "drop_types": [
+      "XRD",
+      "SAED",
+      "EDS",
+      "EDX",
+      "EPMA",
+      "stress_strain_curve",
+      "hysteresis_loop",
+      "schematic",
+      "other"
+    ],
+    "drop_if_post_test": true,
+    "require_microstructure": true
+  },
+  "property_groups": []
+}
