@@ -185,8 +185,10 @@ def test_promote_private_field_steel(tmp_path: Path):
     promoted = next(f for f in lib["fields"] if f["id"] == private["id"])
     assert promoted["label"] == private["label"]
     after = cm.load_overlay(ws, "steel_proj")
-    assert after["private_fields"] == []
+    # lab_note 已提升出私有字段；save_overlay 会按文献类型补上 doi 标识
+    assert not any(f.get("id") == "lab_note" for f in after["private_fields"])
     assert "lab_note" in after["selected_field_ids"]
+    assert any(f.get("id") == "doi" for f in after["private_fields"])
 
 
 def test_domain_projects_are_runnable_with_overlay():
@@ -242,3 +244,5 @@ def test_create_project_defaults_document_kind_paper(tmp_path: Path):
     cm.create_project(ws, "mini2", "力学子集", "steel", ["title", "sample_id", "yield_strength"])
     overlay = cm.load_overlay(ws, "mini2")
     assert overlay["document_kind"] == "paper"
+    assert any(f.get("id") == "doi" for f in overlay.get("private_fields") or [])
+    assert "doi" in overlay["selected_field_ids"]

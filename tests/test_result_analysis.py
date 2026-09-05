@@ -9,6 +9,7 @@ from tools.result_analysis import (
     run_analysis,
     list_analyses_under_runs,
     find_analysis,
+    resolve_analyze_scope,
 )
 from tools.workbench_server import handle_get, handle_post
 
@@ -100,6 +101,30 @@ def test_prompt_mentions_three_foci():
     assert "figure_judgment" in system
     assert "最多12" in system.replace(" ", "")
     assert "vs_source" in user
+
+
+def test_prompt_respects_selected_and_custom_focus():
+    system, user = build_analyze_prompt(
+        "vs_source",
+        sliced={},
+        source_text="hello",
+        focuses=["figure_judgment"],
+        custom_focus="只看断后图有没有标错",
+    )
+    assert "figure_judgment" in system
+    assert "process_binding" not in system
+    assert "只看断后图" in system
+    assert "custom" in user
+    try:
+        resolve_analyze_scope([], "")
+        assert False, "should raise"
+    except ValueError:
+        pass
+
+
+def test_slice_filters_to_selected_focus():
+    sliced = slice_result_for_analysis(_sample_result(), ["figure_judgment"])
+    assert list(sliced.keys()) == ["figure_judgment"]
 
 
 def test_filter_diff_keeps_relevant_paths():
@@ -271,9 +296,12 @@ def test_analyze_panel_in_review():
     assert 'id="analyzePanel"' in block
     assert 'value="vs_source"' in block
     assert 'value="vs_runs"' in block
+    assert 'id="analyzeCustomFocus"' in block
+    assert "analyze-focus" in block
     js = (ROOT / "app/app.js").read_text(encoding="utf-8")
     assert "async function startAnalyze" in js
-    assert "function syncAnalyzeButton" in js
+    assert "function collectAnalyzeScope" in js
+    assert "custom_focus" in js
     assert "value_binding" in js
     assert "process_binding" in js
     assert "figure_judgment" in js

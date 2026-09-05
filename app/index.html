@@ -3,16 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>材料文献抽取工作台 Demo</title>
-    <link rel="stylesheet" href="./styles.css?v=20260830_run_delete" />
+    <title>材料文献抽取工作台</title>
+    <link rel="stylesheet" href="./styles.css?v=20260904_analyze_focus" />
   </head>
   <body>
     <header class="topbar">
       <div>
-        <div class="crumb">数据抽取 / 分阶段抽取工作台 / Demo</div>
+        <div class="crumb">数据抽取 / 分阶段抽取工作台</div>
         <h1>SteelDataExtractor</h1>
       </div>
-        <div class="safe-badge" id="modeBadge">远端测试工作区 · 结果写入 test_runs · 不写入 Extract_data</div>
     </header>
 
     <nav class="view-nav" id="viewNav">
@@ -22,6 +21,29 @@
       <button type="button" data-view="review">复核</button>
       <button type="button" data-view="export">导出</button>
     </nav>
+    <section class="job-progress" id="jobProgress">
+      <div class="job-progress-head">
+        <strong>抽取任务</strong>
+        <span id="jobProgressSummary" class="mode-hint">无进行中任务</span>
+        <button type="button" id="btnCancelJobs" class="ghost tiny" hidden>取消进行中</button>
+      </div>
+      <table class="job-progress-table" id="jobProgressTable">
+        <thead>
+          <tr>
+            <th>状态</th>
+            <th>项目</th>
+            <th>文献</th>
+            <th>模型</th>
+            <th>开始</th>
+            <th>结束 / 已用</th>
+            <th>run</th>
+          </tr>
+        </thead>
+        <tbody id="jobProgressBody">
+          <tr><td colspan="7" class="mode-hint">还没有抽取任务。</td></tr>
+        </tbody>
+      </table>
+    </section>
 
     <main class="layout">
       <aside class="sidebar">
@@ -29,6 +51,7 @@
           <div class="panel-title">
             <h2>项目</h2>
             <button class="ghost tiny" id="btnNewProject">新建</button>
+            <button class="ghost tiny" id="btnDeleteProject" title="删除当前项目">删除</button>
           </div>
           <div class="project-list" id="projectList"></div>
         </section>
@@ -176,9 +199,11 @@
                 <option value="">自动选择最新结果</option>
               </select>
             </label>
+            <button type="button" id="btnShowRunArtifacts" class="ghost">查看源输出</button>
             <button type="button" id="btnDeleteRun" class="ghost danger">删除所选结果</button>
             <span class="mode-hint" id="deleteRunStatus"></span>
           </div>
+          <div id="runArtifactsPanel" class="run-artifacts-panel" hidden></div>
           <div class="run-compare-bar">
             <span class="run-compare-title">双 run 对比</span>
             <label>
@@ -218,7 +243,17 @@
             </label>
             <span class="mode-hint" id="analyzeStatus"></span>
           </div>
-          <p class="mode-hint analyze-hint">只检查三类问题：数值是否准确且挂对样品/状态、工艺是否对应、图片判断是否准确。不写长篇综述。</p>
+          <div class="analyze-focus-row">
+            <span class="run-compare-title">检查重点</span>
+            <label class="check-item"><input type="checkbox" class="analyze-focus" value="value_binding" checked /> 数值绑定（数值准且挂对样品/状态）</label>
+            <label class="check-item"><input type="checkbox" class="analyze-focus" value="process_binding" checked /> 工艺对应</label>
+            <label class="check-item"><input type="checkbox" class="analyze-focus" value="figure_judgment" checked /> 图片判断</label>
+          </div>
+          <label class="analyze-custom-label">
+            自定义检查重点（可选）
+            <textarea id="analyzeCustomFocus" rows="2" placeholder="例如：只核对电导率是否挂错状态；比较例有没有被当成样品；Table 2 的屈服强度单位"></textarea>
+          </label>
+          <p class="mode-hint analyze-hint">可勾选内置三类，或自己写要查什么；两者可并用。不写长篇综述。</p>
           <div id="analyzePanel" class="run-analyze-panel" hidden></div>
           <div class="review-split">
             <article class="source-pane">
@@ -285,7 +320,7 @@
               <div class="panel-title">
                 <h3>文档类型</h3>
               </div>
-              <p class="mode-hint">只影响送入模型前的文本剪裁，不改字段和阶段。专利会去掉摘要、技术领域、背景和权利要求，从实施方式/实施例起保留。</p>
+              <p class="mode-hint">影响文本剪裁；保存时会把 DOI / 专利号换成与类型匹配的标识字段，不改性能字段和阶段。专利会去掉摘要、技术领域、背景和权利要求，从实施方式/实施例起保留。</p>
               <label>文档类型
                 <select id="documentKind">
                   <option value="paper">学术文献</option>
@@ -369,21 +404,38 @@
         <section class="panel" data-view-panel="export">
           <div class="panel-title">
             <h3>导出</h3>
-            <span class="mode-hint">下载项目字段配置或抽取结果</span>
+            <span class="mode-hint">导出 Schema / 项目配置，或勾选文献导出抽取结果</span>
           </div>
-          <div class="export-actions">
-            <button id="btnExport" class="primary">导出项目配置</button>
-            <button id="btnExportResults" class="primary">导出抽取结果</button>
-            <label class="export-option">
-              <input id="includeRejected" type="checkbox" checked />
-              含规则未通过
-            </label>
-            <p class="mode-hint">结果导出当前文献；未选文献时导出本项目全部已抽文献。</p>
+
+          <div class="export-block">
+            <h4>Schema / 项目配置</h4>
+            <p class="mode-hint">按当前字段配置生成完整抽取 Schema；也可下载含字段、阶段与 Schema 的项目配置 JSON。</p>
+            <div class="export-actions">
+              <button type="button" id="copySchemaBtnMain" class="ghost">复制 Schema</button>
+              <button type="button" id="btnExport" class="primary">下载项目配置（含 Schema）</button>
+            </div>
+            <pre id="schemaPreviewMain" class="export-schema-preview">切换到本页或保存配置后显示 Schema。</pre>
           </div>
+
+          <div class="export-block">
+            <h4>抽取结果</h4>
+            <p class="mode-hint">勾选要导出的已抽取文献；未勾选时点导出会提示先选择。</p>
+            <div class="export-paper-toolbar">
+              <label class="export-option"><input type="checkbox" id="exportSelectAll" /> 全选</label>
+              <label class="export-option">
+                <input id="includeRejected" type="checkbox" checked />
+                含规则未通过
+              </label>
+              <button type="button" id="btnExportResults" class="primary">导出勾选结果</button>
+              <span class="mode-hint" id="exportResultsStatus"></span>
+            </div>
+            <div id="exportPaperChecks" class="export-paper-checks"></div>
+          </div>
+
           <div class="export-advanced">
             <label>
               <input id="toggleLegacyDev" type="checkbox" />
-              高级：显示 Schema / Prompt / 快照等开发面板
+              高级：显示 Prompt / 快照等开发面板
             </label>
           </div>
         </section>
@@ -565,13 +617,28 @@
           <input id="newProjectName" placeholder="我的钢铁项目" />
         </label>
         <label>
+          文档类型
+          <select id="newProjectDocumentKind">
+            <option value="paper">学术文献</option>
+            <option value="patent">专利</option>
+          </select>
+        </label>
+        <p class="mode-hint">文献砍参考文献；专利从实施方式/实施例起保留。标识字段分别为 DOI / 专利号。</p>
+        <label>
+          从已有项目复制
+          <select id="newProjectCopyFrom">
+            <option value="">不复制（按模板勾选）</option>
+          </select>
+        </label>
+        <p class="mode-hint" id="newProjectCopyHint" hidden>字段与阶段将从所选项目复制，创建后可在配置页修改。</p>
+        <label id="newProjectTemplateLabel">
           模板
           <select id="newProjectTemplate">
             <option value="steel">steel（钢铁）</option>
             <option value="blank">blank（空模板，仅私有字段）</option>
           </select>
         </label>
-        <div>
+        <div id="newProjectFieldsBlock">
           <h4>勾选库字段</h4>
           <div id="newProjectFieldChecks" class="field-library-checks"></div>
         </div>
@@ -591,6 +658,6 @@
 
     <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
     <script src="./readonly_snapshot.js?v=20260828_task9"></script>
-    <script src="./app.js?v=20260830_run_delete"></script>
+    <script src="./app.js?v=20260904_resume_retry"></script>
   </body>
 </html>

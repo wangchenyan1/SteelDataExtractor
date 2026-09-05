@@ -197,7 +197,13 @@ class FixtureBackend:
         stage = hint.get("stage")
         step_id = hint.get("step_id")
         if stage == "entity":
-            return _entity_result()
+            ent = _entity_result()
+            # 骨架步不再负责图片；即使旧夹具带了 figures 也剥掉
+            ent = {k: v for k, v in ent.items() if k != "figures"}
+            return ent
+        if stage == "figure_extract":
+            ent = _entity_result()
+            return {"figures": list(ent.get("figures") or [])}
         if stage == "property":
             if step_id == "magnetic":
                 return _magnetic_result()

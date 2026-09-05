@@ -49,6 +49,7 @@ def test_list_records_expose_extract_status():
     rec = next(r for r in recs if r["paper_id"] == "10.1007_s11665-019-04233-6")
     assert "extract_status" in rec
     assert rec["extract_status"] in ("success", "failed", "none")
+    assert "extract_skeleton_done" in rec
 
 
 def test_ui_has_rerun_and_failed_label():
@@ -56,6 +57,7 @@ def test_ui_has_rerun_and_failed_label():
     assert ">操作<" in html
     js = (ROOT / "app/app.js").read_text(encoding="utf-8")
     assert "async function rerunPaper" in js
-    assert "抽取失败" in js
+    assert "失败·骨架已完成" in js
+    assert "失败·骨架未完成" in js
     assert "重新抽取" in js
     assert "extract_status" in js

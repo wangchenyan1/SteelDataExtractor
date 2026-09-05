@@ -15,18 +15,25 @@
       "model": "Vendor2/Claude-4.5-Sonnet"
     },
     {
-      "id": "gemini-2.5-flash",
-      "label": "Gemini 2.5 Flash（多模态）",
+      "id": "gemini-3.1-pro",
+      "label": "Gemini 3.1 Pro（多模态）",
       "backend": "claude",
       "base_url": "https://api.gpugeek.com/v1/messages",
-      "model": "Vendor/Gemini-2.5-Flash"
+      "model": "Vendor2/Gemini-3.1-pro"
     },
     {
-      "id": "qwen-vl-max",
-      "label": "Qwen-VL-Max（多模态）",
+      "id": "gpt-5.2",
+      "label": "GPT 5.2（多模态）",
       "backend": "claude",
       "base_url": "https://api.gpugeek.com/v1/messages",
-      "model": "Vendor/Qwen-VL-Max"
+      "model": "Vendor2/GPT-5.2"
+    },
+    {
+      "id": "gemini-3.8-flash",
+      "label": "Gemini 3.8 Flash（多模态）",
+      "backend": "claude",
+      "base_url": "https://api.gpugeek.com/v1/messages",
+      "model": "Vendor2/Gemini-3.8-flash"
     }
   ],
   "projects": {
@@ -83,7 +90,7 @@
     },
     "cuti": {
       "name": "钛铜文献",
-      "description": "钛铜学术文献抽取项目。文档类型为学术文献；请勿与专利混放。",
+      "description": "钛铜学术文献抽取项目。",
       "runnable": true,
       "backend": "claude",
       "template_id": "steel",

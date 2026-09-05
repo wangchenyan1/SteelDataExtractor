@@ -145,6 +145,10 @@
     if (name === "review" || name === "export") {
       renderExtractedPaperList();
     }
+    if (name === "export") {
+      renderSchema();
+      renderExportPaperChecks();
+    }
     if (name === "review" && isCurrentPaperExtracted()) {
       loadReview();
     }
@@ -183,6 +187,7 @@
     renderProjectList();
     const first = state.defaultProject || Object.keys(state.projects)[0];
     if (first) await selectProject(first);
+    startJobPolling();
   }
 
   function normalizeSnapshotRules(fieldRules) {
@@ -242,6 +247,98 @@
       el.addEventListener("click", () => selectProject(p.id));
       box.appendChild(el);
     });
+    updateDeleteProjectButton();
+  }
+
+  function updateDeleteProjectButton() {
+    const btn = $("btnDeleteProject");
+    if (!btn) return;
+    const protectedId = state.currentId === "demo_steel";
+    btn.disabled = !state.currentId || protectedId;
+    btn.title = protectedId
+      ? "示例项目不可删除"
+      : "删除当前项目（配置、文献解析与抽取记录）";
+  }
+
+  async function deleteCurrentProject() {
+    const pid = state.currentId;
+    if (!pid) return;
+    if (pid === "demo_steel") {
+      setRunStatus("示例项目不可删除", "failed");
+      return;
+    }
+    const p = state.projects[pid] || {};
+    const name = p.name || pid;
+    if (
+      !window.confirm(
+        "确定删除项目「" +
+          name +
+          "」（" +
+          pid +
+          "）？\n\n将删除该项目配置、全部文献解析与抽取记录，不可恢复。"
+      )
+    ) {
+      return;
+    }
+    setRunStatus("正在删除项目…", "running");
+    try {
+      await api("/api/project_delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project: pid }),
+      });
+      await reloadProjects();
+      const next =
+        state.projects[state.defaultProject]
+          ? state.defaultProject
+          : Object.keys(state.projects)[0] || "";
+      if (next) await selectProject(next);
+      else {
+        state.currentId = "";
+        state.project = null;
+        renderProjectList();
+        renderPapers();
+      }
+      setRunStatus("已删除项目 " + pid, "success");
+    } catch (e) {
+      setRunStatus("删除项目失败：" + e.message, "failed");
+    }
+  }
+
+  async function deletePaper(paperId) {
+    const pid = (paperId || "").trim();
+    if (!pid || !state.currentId) return;
+    const rec = paperRecords().find((r) => r.paper_id === pid);
+    const label = (rec && (rec.title || rec.paper_id)) || pid;
+    if (
+      !window.confirm(
+        "确定删除文献「" +
+          label +
+          "」？\n\n将删除解析文件与该篇全部抽取记录，不可恢复。"
+      )
+    ) {
+      return;
+    }
+    setRunStatus("正在删除文献…", "running");
+    try {
+      await api("/api/paper_delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project: state.currentId, paper_id: pid }),
+      });
+      delete state.selectedPaperIds[pid];
+      await reloadProjects();
+      state.project = state.projects[state.currentId];
+      if (state.paperId === pid) {
+        state.paperId = "";
+        state.currentResult = null;
+        state.paperText = "";
+      }
+      renderPapers();
+      setRunStatus("已删除文献 " + pid, "success");
+    } catch (e) {
+      setRunStatus("删除文献失败：" + e.message, "failed");
+    }
   }
 
   async function selectProject(pid) {
@@ -260,6 +357,7 @@
     $("projectTitle").textContent = p.name;
     $("projectDesc").textContent = p.description || "";
     renderProjectList();
+    updateDeleteProjectButton();
     renderModelConfig();
     await loadOverlayAndLibrary();
     renderDocumentKindBadges();
@@ -1382,8 +1480,70 @@
   }
 
   function renderSchema() {
+    if (!state.project) {
+      state.schemaText = "";
+      if ($("schemaPreview")) $("schemaPreview").textContent = "";
+      if ($("schemaPreviewMain")) $("schemaPreviewMain").textContent = "请先选择项目。";
+      return;
+    }
     state.schemaText = JSON.stringify(buildSchema(), null, 2);
-    $("schemaPreview").textContent = state.schemaText;
+    if ($("schemaPreview")) $("schemaPreview").textContent = state.schemaText;
+    if ($("schemaPreviewMain")) $("schemaPreviewMain").textContent = state.schemaText;
+  }
+
+  function copySchemaText() {
+    const text = state.schemaText || "";
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text);
+    }
+    if ($("runStatus")) $("runStatus").textContent = text ? "已复制 Schema。" : "暂无 Schema 可复制。";
+  }
+
+  function selectedExportPaperIds() {
+    return Array.from(document.querySelectorAll("#exportPaperChecks input[data-export-paper]:checked"))
+      .map((el) => el.getAttribute("data-export-paper"))
+      .filter(Boolean);
+  }
+
+  function renderExportPaperChecks() {
+    const box = $("exportPaperChecks");
+    if (!box) return;
+    const prev = new Set(selectedExportPaperIds());
+    if (!prev.size && state.paperId) prev.add(state.paperId);
+    const items = extractedPaperRecords();
+    box.innerHTML = "";
+    if (!items.length) {
+      box.innerHTML = '<div class="mode-hint">本项目还没有已抽取文献，请先在「抽取」页完成抽取。</div>';
+      if ($("exportSelectAll")) $("exportSelectAll").checked = false;
+      return;
+    }
+    items.forEach((rec) => {
+      const label = document.createElement("label");
+      label.className = "check-item";
+      const inp = document.createElement("input");
+      inp.type = "checkbox";
+      inp.setAttribute("data-export-paper", rec.paper_id);
+      inp.checked = prev.has(rec.paper_id);
+      const span = document.createElement("span");
+      span.textContent = (rec.title || rec.paper_id) + "（" + rec.paper_id + "）";
+      label.appendChild(inp);
+      label.appendChild(span);
+      box.appendChild(label);
+    });
+    syncExportSelectAll();
+  }
+
+  function syncExportSelectAll() {
+    const all = document.querySelectorAll("#exportPaperChecks input[data-export-paper]");
+    const checked = document.querySelectorAll("#exportPaperChecks input[data-export-paper]:checked");
+    if ($("exportSelectAll")) {
+      $("exportSelectAll").checked = all.length > 0 && checked.length === all.length;
+    }
+    if ($("exportResultsStatus")) {
+      $("exportResultsStatus").textContent = all.length
+        ? `已选 ${checked.length} / ${all.length} 篇`
+        : "";
+    }
   }
 
   // ---------------------------------------------------------------- rule dialog
@@ -1586,19 +1746,26 @@
   async function exportResults() {
     if (!state.currentId) return;
     const includeRejected = $("includeRejected").checked;
-    const paperId = currentPaperId();
+    const paperIds = selectedExportPaperIds();
+    if (!paperIds.length) {
+      $("runStatus").textContent = "请先勾选要导出的文献。";
+      if ($("exportResultsStatus")) $("exportResultsStatus").textContent = "请先勾选文献。";
+      return;
+    }
     const qs = new URLSearchParams({ include_rejected: includeRejected ? "true" : "false" });
-    if (paperId) qs.set("paper_id", paperId);
+    qs.set("paper_ids", paperIds.join(","));
     try {
       const data = await api(
         `/api/projects/${encodeURIComponent(state.currentId)}/export_results?${qs}`
       );
-      const filename = paperId
-        ? `${state.currentId}_${paperId}_results.json`
-        : `${state.currentId}_results.json`;
+      const filename =
+        paperIds.length === 1
+          ? `${state.currentId}_${paperIds[0]}_results.json`
+          : `${state.currentId}_${paperIds.length}papers_results.json`;
       downloadJsonBlob(data, filename);
       logChange(`导出 ${filename}`);
-      $("runStatus").textContent = "已下载抽取结果。";
+      $("runStatus").textContent = `已下载 ${paperIds.length} 篇抽取结果。`;
+      if ($("exportResultsStatus")) $("exportResultsStatus").textContent = `已导出 ${paperIds.length} 篇。`;
     } catch (e) {
       $("runStatus").textContent = "导出结果失败：" + e.message;
     }
@@ -1610,11 +1777,59 @@
   }
 
   // ---------------------------------------------------------------- new project
+  function fillNewProjectCopyFrom() {
+    const sel = $("newProjectCopyFrom");
+    if (!sel) return;
+    const keep = sel.value || "";
+    sel.innerHTML = "";
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = "不复制（按模板勾选）";
+    sel.appendChild(empty);
+    Object.keys(state.projects || {})
+      .sort()
+      .forEach((pid) => {
+        const p = state.projects[pid] || {};
+        const opt = document.createElement("option");
+        opt.value = pid;
+        opt.textContent = (p.name || pid) + "（" + pid + "）";
+        sel.appendChild(opt);
+      });
+    if (keep && Array.from(sel.options).some((o) => o.value === keep)) sel.value = keep;
+  }
+
+  function syncNewProjectCopyUI() {
+    const copyFrom = ($("newProjectCopyFrom") && $("newProjectCopyFrom").value) || "";
+    const copying = !!copyFrom;
+    const tpl = $("newProjectTemplate");
+    const fields = $("newProjectFieldsBlock");
+    const hint = $("newProjectCopyHint");
+    if (tpl) tpl.disabled = copying;
+    if (fields) fields.style.opacity = copying ? "0.5" : "";
+    if (fields) {
+      fields.querySelectorAll("input, select, button").forEach((el) => {
+        el.disabled = copying;
+      });
+    }
+    if (hint) {
+      hint.hidden = !copying;
+      if (copying) {
+        const p = state.projects[copyFrom] || {};
+        hint.textContent =
+          "字段与阶段将从 " + (p.name || copyFrom) + " 复制，创建后可在配置页修改。";
+      }
+    }
+  }
+
   async function openNewProjectDialog() {
     $("newProjectId").value = "";
     $("newProjectName").value = "";
     $("newProjectTemplate").value = "steel";
+    if ($("newProjectDocumentKind")) $("newProjectDocumentKind").value = "paper";
+    fillNewProjectCopyFrom();
+    if ($("newProjectCopyFrom")) $("newProjectCopyFrom").value = "";
     await fillNewProjectChecks("steel");
+    syncNewProjectCopyUI();
     $("newProjectDialog").showModal();
   }
 
@@ -1665,6 +1880,9 @@
     const id = $("newProjectId").value.trim();
     const name = $("newProjectName").value.trim() || id;
     const template_id = $("newProjectTemplate").value;
+    const document_kind =
+      ($("newProjectDocumentKind") && $("newProjectDocumentKind").value) || "paper";
+    const copy_from = ($("newProjectCopyFrom") && $("newProjectCopyFrom").value) || "";
     if (!id) {
       $("runStatus").textContent = "请填写项目 ID。";
       return;
@@ -1673,13 +1891,22 @@
     $("newProjectFieldChecks")
       .querySelectorAll("input[data-new-field-id]:checked")
       .forEach((cb) => selected.push(cb.getAttribute("data-new-field-id")));
+    const body = {
+      id,
+      name,
+      template_id,
+      selected_field_ids: selected,
+      document_kind,
+    };
+    if (copy_from) body.copy_from = copy_from;
     try {
       await api("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id, name, template_id, selected_field_ids: selected }),
+        body: JSON.stringify(body),
       });
-      logChange(`新建项目 ${id}`);
+      logChange(`新建项目 ${id}（${document_kind === "patent" ? "专利" : "文献"}）`);
+      $("newProjectDialog").close();
       await reloadProjects();
       renderProjectList();
       await selectProject(id);
@@ -1748,6 +1975,7 @@
     const items = extractedPaperRecords();
     if (!items.length) {
       box.innerHTML = '<div class="mode-hint">本项目还没有已抽取文献</div>';
+      if (state.view === "export") renderExportPaperChecks();
       return;
     }
     items.forEach((rec) => {
@@ -1760,6 +1988,7 @@
       btn.addEventListener("click", () => selectExtractedPaper(rec.paper_id));
       box.appendChild(btn);
     });
+    if (state.view === "export") renderExportPaperChecks();
   }
 
   async function selectExtractedPaper(paperId) {
@@ -1790,7 +2019,9 @@
       let extractedClass = "";
       if (st === "success") extractedText = "已抽取";
       else if (st === "failed") {
-        extractedText = "抽取失败";
+        extractedText = rec.extract_skeleton_done
+          ? "失败·骨架已完成"
+          : "失败·骨架未完成";
         extractedClass = "extract-failed";
       }
       const errTip = rec.extract_error ? String(rec.extract_error) : "";
@@ -1802,7 +2033,10 @@
         `<td class="paper-title-cell">${esc(label)}</td>` +
         `<td>${esc(parsedText)}</td>` +
         `<td class="${extractedClass}" title="${esc(errTip)}">${esc(extractedText)}</td>` +
-        `<td><button type="button" class="ghost tiny paper-rerun-btn" data-paper-id="${esc(rec.paper_id)}">重新抽取</button></td>`;
+        `<td class="paper-actions">` +
+        `<button type="button" class="ghost tiny paper-rerun-btn" data-paper-id="${esc(rec.paper_id)}">重新抽取</button> ` +
+        `<button type="button" class="ghost tiny paper-delete-btn" data-paper-id="${esc(rec.paper_id)}">删除</button>` +
+        `</td>`;
       tr.addEventListener("click", (ev) => {
         if (ev.target && ev.target.closest && ev.target.closest("input,button")) return;
         selectPaperRow(rec.paper_id);
@@ -1821,6 +2055,13 @@
         rerun.addEventListener("click", (ev) => {
           ev.stopPropagation();
           rerunPaper(rec.paper_id);
+        });
+      }
+      const delBtn = tr.querySelector(".paper-delete-btn");
+      if (delBtn) {
+        delBtn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          deletePaper(rec.paper_id);
         });
       }
       tbody.appendChild(tr);
@@ -1957,8 +2198,9 @@
     try {
       const out = await runOnePaperExtract(paperId);
       const r = out.result || {};
+      const resumeNote = out.resumed ? "（从已完成骨架续跑）" : "";
       setRunStatus(
-        `重新抽取完成：${out.run_id || ""}（样品 ${(r.samples || []).length} · 状态 ${(r.conditions || []).length}）`,
+        `重新抽取完成${resumeNote}：${out.run_id || ""}（样品 ${(r.samples || []).length} · 状态 ${(r.conditions || []).length}）`,
         "done"
       );
       await reloadProjects();
@@ -1983,27 +2225,29 @@
       $("runStatus").textContent = "请先勾选已解析的文献。";
       return;
     }
-    setBusy(true);
-    let ok = 0;
-    let fail = 0;
+    const btn = $("btnRunSelected");
+    if (btn) btn.disabled = true;
     try {
-      for (const paperId of ids) {
-        setRunStatus(`正在抽取 ${paperId}（${ok + fail + 1}/${ids.length}）...`, "running");
-        try {
-          await runOnePaperExtract(paperId);
-          ok += 1;
-        } catch (e) {
-          fail += 1;
-          setRunStatus(`抽取失败 ${paperId}：${e.message}`, "failed");
-        }
-      }
-      setRunStatus(`抽取所选完成：成功 ${ok} · 失败 ${fail}`, fail ? "failed" : "done");
-      await reloadProjects();
-      state.project = state.projects[state.currentId];
-      renderPapers();
-      await refreshRuns();
-    } finally {
-      setBusy(false);
+      const out = await api("/api/run_batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project: state.currentId,
+          paper_ids: ids,
+          mode: ($("extractMode") && $("extractMode").value) || "two_stage",
+          partition: $("outputPartition").value,
+          model_id: state.selectedModel && state.selectedModel.id,
+          concurrency: 2,
+        }),
+      });
+      setRunStatus(
+        `已提交批量抽取 ${out.count} 篇（并发 ${out.concurrency}），进度见上方任务表`,
+        "running"
+      );
+      await refreshJobProgress();
+    } catch (e) {
+      setRunStatus("提交批量抽取失败：" + e.message, "failed");
+      updateSelectedRunButton();
     }
   }
 
@@ -2040,6 +2284,164 @@
       partition: $("outputPartition").value,
       model_id: state.selectedModel && state.selectedModel.id,
     };
+  }
+
+  function projectName(pid) {
+    const p = (state.projects || {})[pid];
+    return (p && p.name) || pid || "";
+  }
+
+  function formatJobClock(iso) {
+    if (!iso) return "—";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso).replace("T", " ").slice(0, 19);
+    const pad = (n) => String(n).padStart(2, "0");
+    return (
+      pad(d.getMonth() + 1) +
+      "-" +
+      pad(d.getDate()) +
+      " " +
+      pad(d.getHours()) +
+      ":" +
+      pad(d.getMinutes()) +
+      ":" +
+      pad(d.getSeconds())
+    );
+  }
+
+  function jobElapsed(job) {
+    const start = job.started_at ? new Date(job.started_at).getTime() : NaN;
+    if (Number.isNaN(start)) return "—";
+    const end = job.finished_at ? new Date(job.finished_at).getTime() : Date.now();
+    const sec = Math.max(0, Math.round((end - start) / 1000));
+    if (sec < 60) return sec + "s";
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return m + "m" + String(s).padStart(2, "0") + "s";
+  }
+
+  function jobStatusLabel(st, job) {
+    if (st === "cancelled") return "已取消";
+    if (st === "failed") {
+      if (job && job.skeleton_done === true) return "失败·骨架已完成";
+      if (job && job.skeleton_done === false) return "失败·骨架未完成";
+      return "失败";
+    }
+    return { running: "进行中", success: "已完成" }[st] || st || "?";
+  }
+
+  function renderJobProgress(jobs) {
+    const body = $("jobProgressBody");
+    const sum = $("jobProgressSummary");
+    if (!body) return;
+    const list = jobs || [];
+    const running = list.filter((j) => j.status === "running").length;
+    const failed = list.filter((j) => j.status === "failed").length;
+    const cancelBtn = $("btnCancelJobs");
+    if (cancelBtn) cancelBtn.hidden = running === 0;
+    if (sum) {
+      if (!list.length) sum.textContent = "无进行中任务";
+      else sum.textContent = "进行中 " + running + " · 最近 " + list.length + (failed ? "（失败 " + failed + "）" : "");
+    }
+    if (!list.length) {
+      body.innerHTML = '<tr><td colspan="7" class="mode-hint">还没有抽取任务。</td></tr>';
+      return;
+    }
+    body.innerHTML = list
+      .map((j) => {
+        const st = j.status || "";
+        const endCol =
+          st === "running"
+            ? "已用 " + jobElapsed(j)
+            : formatJobClock(j.finished_at) + "（" + jobElapsed(j) + "）";
+        const err = j.error ? '<div class="job-st-failed">' + esc(j.error) + "</div>" : "";
+        const kind = j.kind === "batch" ? "批量" : j.kind === "run_step" && j.step_id ? "阶段 " + j.step_id : "";
+        const cancelCell =
+          st === "running"
+            ? '<div><button type="button" class="ghost tiny job-cancel-one" data-job-id="' +
+              esc(j.job_id) +
+              '">取消</button></div>'
+            : "";
+        return (
+          "<tr>" +
+          '<td class="job-st-' +
+          esc(st) +
+          '">' +
+          esc(jobStatusLabel(st, j)) +
+          cancelCell +
+          "</td>" +
+          "<td>" +
+          esc(projectName(j.project_id)) +
+          "</td>" +
+          "<td>" +
+          esc(j.paper_id || "") +
+          (kind ? "<div class='mode-hint'>" + esc(kind) + "</div>" : "") +
+          "</td>" +
+          "<td>" +
+          esc(j.model_id || "") +
+          "</td>" +
+          "<td>" +
+          esc(formatJobClock(j.started_at)) +
+          "</td>" +
+          "<td>" +
+          esc(endCol) +
+          err +
+          "</td>" +
+          "<td>" +
+          esc(j.run_id || "—") +
+          "</td>" +
+          "</tr>"
+        );
+      })
+      .join("");
+    body.querySelectorAll(".job-cancel-one").forEach((btn) => {
+      btn.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        cancelJobs(btn.getAttribute("data-job-id"));
+      });
+    });
+  }
+
+  async function cancelJobs(jobId) {
+    try {
+      await api("/api/job_cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_id: jobId || "" }),
+      });
+      await refreshJobProgress();
+      setRunStatus(jobId ? "已请求取消该任务" : "已请求取消进行中的任务", "done");
+    } catch (e) {
+      setRunStatus("取消失败：" + e.message, "failed");
+    }
+  }
+
+  async function refreshJobProgress() {
+    try {
+      const data = await api("/api/jobs");
+      const jobs = data.jobs || [];
+      renderJobProgress(jobs);
+      const running = jobs.some((j) => j.status === "running");
+      if (state._jobsWereRunning && !running) {
+        reloadProjects().then(() => {
+          state.project = state.projects[state.currentId];
+          renderPapers();
+          refreshRuns();
+        }).catch(() => {});
+      }
+      state._jobsWereRunning = running;
+      return running;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function startJobPolling() {
+    const tick = async () => {
+      const running = await refreshJobProgress();
+      setTimeout(tick, running ? 2000 : 8000);
+    };
+    tick();
   }
 
   function setBusy(busy) {
@@ -2085,8 +2487,9 @@
       });
       afterRun(out);
       const r = out.result || {};
+      const resumeNote = out.resumed ? "（从已完成骨架续跑）" : "";
       setRunStatus(
-        `完成：${out.run_id}（样品 ${(r.samples || []).length} · ` +
+        `完成${resumeNote}：${out.run_id}（样品 ${(r.samples || []).length} · ` +
           `状态 ${(r.conditions || []).length} · 性能值 ${countProps(r)}）`,
         "done"
       );
@@ -2977,12 +3380,19 @@
       applyEntityDoneFromRunInfo(res.run_info || {}, res.result || {});
       renderStepList();
       fillResultPanes(res);
+      hideRunArtifacts();
     } catch (e) {
       $("resultMeta").textContent = "暂无结果";
       $("resultSummary").innerHTML = "";
       $("resultFieldList").innerHTML = "";
       state.currentResult = null;
-      state.currentRunId = null;
+      const selRun = ($("runSelect") && $("runSelect").value) || "";
+      state.currentRunId = selRun || null;
+      if (selRun) {
+        await showRunArtifacts(selRun);
+      } else {
+        hideRunArtifacts();
+      }
     }
     await refreshAnalyzeHistory();
     syncAnalyzeButton();
@@ -3019,6 +3429,10 @@
       state.currentResult = null;
       state.currentRunId = null;
       if ($("runSelect")) $("runSelect").value = "";
+      if ($("runArtifactsPanel")) {
+        $("runArtifactsPanel").hidden = true;
+        $("runArtifactsPanel").innerHTML = "";
+      }
       if ($("runComparePanel")) {
         $("runComparePanel").hidden = true;
         $("runComparePanel").innerHTML = "";
@@ -3046,7 +3460,7 @@
     const info = res.run_info || {};
     state.currentRunId = info.run_id || null;
     $("resultMeta").textContent = info.run_id
-      ? `${info.run_id} · ${info.mode || ""} · ${info.backend || ""}`
+      ? `${info.run_id} · ${info.mode || ""} · ${info.model_id || info.backend || ""}`
       : "";
     const trim = (r._pipeline && r._pipeline.input_trim) || {};
     const rejectedCount = countRejected(r);
@@ -3105,16 +3519,132 @@
     return m ? m[1] : (run && run.run_id) || "";
   }
 
+  function runModelLabel(run) {
+    if (run && run.model_id) return String(run.model_id);
+    const id = String((run && run.run_id) || "");
+    // 新格式：{stamp}_{mode}_{model}[_{n}]；stamp 为 YYYYMMDD_HHMMSS
+    const m = id.match(/^\d{8}_\d{6}_[^_]+_(.+)$/);
+    if (m) return m[1].replace(/_\d+$/, "") || m[1];
+    return "";
+  }
+
   function runOptionLabel(run) {
     const mode = modeLabel(run.mode);
     const warn = run.warnings != null ? run.warnings : "?";
     const paper = (run && run.paper_id) || currentPaperId() || "";
     const stamp = runStamp(run);
-    // 主文案：文献ID_抽取方式；时间戳区分同模式多次跑
+    const model = runModelLabel(run);
+    const modelPart = model ? `_${model}` : "";
+    const failed = (run && run.status) === "failed";
+    const tail = failed
+      ? (run.skeleton_done ? "失败·骨架已完成" : "失败·骨架未完成")
+      : `警告${warn}`;
+    // 主文案：文献ID_抽取方式_模型；时间戳区分同模式多次跑
     if (paper) {
-      return `${paper}_${mode}（${stamp}，警告${warn}）`;
+      return `${paper}_${mode}${modelPart}（${stamp}，${tail}）`;
     }
-    return `${run.run_id}（${mode}，警告${warn}）`;
+    return `${run.run_id}（${mode}${model ? " · " + model : ""}，${tail}）`;
+  }
+
+  function selectedRunId() {
+    return ($("runSelect") && $("runSelect").value) || state.currentRunId || "";
+  }
+
+  function hideRunArtifacts() {
+    const box = $("runArtifactsPanel");
+    if (!box) return;
+    box.hidden = true;
+    box.innerHTML = "";
+  }
+
+  function renderRunArtifacts(data) {
+    const box = $("runArtifactsPanel");
+    if (!box) return;
+    const info = data.run_info || {};
+    const err = info.error || "";
+    const files = data.files || [];
+    const steps = (info.completed_steps || []).join("、") || "无";
+    const skel = (info.completed_steps || []).some(
+      (s) => s === "entity" || String(s).endsWith("entity")
+    );
+    const skelText =
+      info.status === "failed"
+        ? skel
+          ? "骨架已完成，后面失败"
+          : "骨架抽取失败"
+        : skel
+          ? "骨架已完成"
+          : "骨架未写盘";
+    let html =
+      '<div class="art-head"><span>run <b>' +
+      esc(data.run_id || "") +
+      "</b></span><span>状态 <b>" +
+      esc(info.status || "?") +
+      "</b></span><span>骨架 <b>" +
+      esc(skelText) +
+      "</b></span><span>已完成步骤 <b>" +
+      esc(steps) +
+      "</b></span><span>模型 <b>" +
+      esc(info.model_id || "") +
+      "</b></span></div>";
+    if (err) {
+      html += '<div class="art-error">错误：' + esc(err) + "</div>";
+    }
+    if (!files.length) {
+      html += '<div class="mode-hint">该 run 没有可展示的源输出文件。</div>';
+    }
+    const kindLabel = { output: "抽取结果", note: "校验", log: "失败日志", meta: "元信息", prompt: "prompt" };
+    files.forEach((f) => {
+      const kind = f.kind || "";
+      const open = kind === "output" || kind === "log" ? " open" : "";
+      const trunc = f.truncated ? "（已截断）" : "";
+      const tag = kindLabel[kind] ? "[" + kindLabel[kind] + "] " : "";
+      html +=
+        "<details" +
+        open +
+        "><summary>" +
+        esc(tag + f.name) +
+        " · " +
+        esc(String(f.bytes || 0)) +
+        " B" +
+        trunc +
+        "</summary><pre>" +
+        esc(f.text || "") +
+        "</pre></details>";
+    });
+    box.hidden = false;
+    box.innerHTML = html;
+  }
+
+  async function showRunArtifacts(runId) {
+    const pid = currentPaperId();
+    const status = $("deleteRunStatus");
+    const rid = runId || selectedRunId();
+    if (!pid) {
+      if (status) status.textContent = "请先选择文献";
+      return;
+    }
+    if (!rid) {
+      if (status) status.textContent = "请先在「结果来源」选择一条 run";
+      return;
+    }
+    if (status) status.textContent = "载入源输出…";
+    try {
+      const q =
+        `/api/run_artifacts?project=${encodeURIComponent(state.currentId)}` +
+        `&paper_id=${encodeURIComponent(pid)}&run_id=${encodeURIComponent(rid)}`;
+      const data = await api(q);
+      renderRunArtifacts(data);
+      if (status) status.textContent = "已载入源输出 " + rid;
+    } catch (e) {
+      if (status) status.textContent = "载入源输出失败：" + (e.message || e);
+      const box = $("runArtifactsPanel");
+      if (box) {
+        box.hidden = false;
+        box.innerHTML =
+          '<div class="art-error">载入失败：' + esc(e.message || e) + "</div>";
+      }
+    }
   }
 
   function fillRunSelect(sel, runs, emptyLabel, keepValue) {
@@ -3328,7 +3858,16 @@
     value_binding: "数值绑定",
     process_binding: "工艺对应",
     figure_judgment: "图片判断",
+    custom: "自定义",
   };
+
+  function collectAnalyzeScope() {
+    const focuses = Array.from(document.querySelectorAll(".analyze-focus:checked")).map(
+      (el) => el.value
+    );
+    const custom = (($("analyzeCustomFocus") && $("analyzeCustomFocus").value) || "").trim();
+    return { focuses: focuses, custom_focus: custom };
+  }
 
   function syncAnalyzeButton() {
     const btn = $("btnStartAnalyze");
@@ -3390,7 +3929,7 @@
       "<th>严重度</th><th>焦点</th><th>路径</th><th>标题</th><th>说明</th><th>建议</th>" +
       "</tr></thead><tbody>";
     if (!issues.length) {
-      html += '<tr><td colspan="6" class="mode-hint">未发现上述三类硬问题</td></tr>';
+      html += '<tr><td colspan="6" class="mode-hint">未发现所选范围内的硬问题</td></tr>';
     }
     issues.forEach((it) => {
       const sev = it.severity || "medium";
@@ -3495,6 +4034,15 @@
         analysis_type: type,
         model_id: state.selectedModel && state.selectedModel.id,
       };
+      const scope = collectAnalyzeScope();
+      if (!scope.focuses.length && !scope.custom_focus) {
+        if (status) status.textContent = "请至少勾选一类检查，或填写自定义检查重点";
+        state.analyzing = false;
+        syncAnalyzeButton();
+        return;
+      }
+      body.focuses = scope.focuses;
+      if (scope.custom_focus) body.custom_focus = scope.custom_focus;
       if (type === "vs_source") {
         const runId = $("runSelect") && $("runSelect").value;
         if (runId) body.run_id = runId;
@@ -3669,6 +4217,7 @@
     $("btnReextract").addEventListener("click", reextract);
     $("btnImportPdfs").addEventListener("click", importPdfs);
     $("btnRunSelected").addEventListener("click", runSelectedPapers);
+    if ($("btnCancelJobs")) $("btnCancelJobs").addEventListener("click", () => cancelJobs(""));
     $("paperSelectAll").addEventListener("change", onPaperSelectAllChange);
     $("btnGoReview").onclick = () => {
       setView("review");
@@ -3676,6 +4225,18 @@
     };
     $("btnExport").addEventListener("click", exportProject);
     $("btnExportResults").addEventListener("click", exportResults);
+    if ($("copySchemaBtnMain")) $("copySchemaBtnMain").addEventListener("click", copySchemaText);
+    if ($("exportSelectAll")) {
+      $("exportSelectAll").addEventListener("change", (e) => {
+        document.querySelectorAll("#exportPaperChecks input[data-export-paper]").forEach((el) => {
+          el.checked = e.target.checked;
+        });
+        syncExportSelectAll();
+      });
+    }
+    if ($("exportPaperChecks")) {
+      $("exportPaperChecks").addEventListener("change", syncExportSelectAll);
+    }
     $("toggleLegacyDev").addEventListener("change", (e) => {
       setLegacyDevPanelsVisible(e.target.checked);
     });
@@ -3690,9 +4251,15 @@
     $("btnAddStage").addEventListener("click", addPropertyStage);
     $("btnAddPropertyGroup").addEventListener("click", addCustomPropertyGroup);
     $("btnNewProject").addEventListener("click", openNewProjectDialog);
+    if ($("btnDeleteProject")) {
+      $("btnDeleteProject").addEventListener("click", deleteCurrentProject);
+    }
     $("newProjectTemplate").addEventListener("change", (e) =>
       fillNewProjectChecks(e.target.value)
     );
+    if ($("newProjectCopyFrom")) {
+      $("newProjectCopyFrom").addEventListener("change", syncNewProjectCopyUI);
+    }
     $("saveNewProject").addEventListener("click", saveNewProject);
     $("usePaperBtn").addEventListener("click", async () => {
       state.paperId = currentPaperId();
@@ -3712,6 +4279,9 @@
     $("paperIdInput").addEventListener("input", updateRunPreview);
     $("pdfPathInput").addEventListener("input", updateRunPreview);
     $("loadReviewBtn").addEventListener("click", loadReview);
+    if ($("btnShowRunArtifacts")) {
+      $("btnShowRunArtifacts").addEventListener("click", () => showRunArtifacts());
+    }
     if ($("btnDeleteRun")) $("btnDeleteRun").addEventListener("click", deleteSelectedRun);
     if ($("btnCompareRuns")) $("btnCompareRuns").addEventListener("click", compareSelectedRuns);
     if ($("compareShowSame")) {
@@ -3748,9 +4318,7 @@
     $("copyPromptBtn").addEventListener("click", () => {
       navigator.clipboard && navigator.clipboard.writeText(state.prompts[state.promptTab] || "");
     });
-    $("copySchemaBtn").addEventListener("click", () => {
-      navigator.clipboard && navigator.clipboard.writeText(state.schemaText || "");
-    });
+    $("copySchemaBtn").addEventListener("click", copySchemaText);
     $("saveField").addEventListener("click", (ev) => {
       ev.preventDefault();
       saveNewField();

@@ -169,6 +169,32 @@ def _condition_schema_fields(fields: dict) -> dict:
     return cond_obj
 
 
+FIGURE_EXTRACT_BATCH_SIZE = 12
+STEP_LLM_MAX_ATTEMPTS = 5
+_RETRYABLE_STAGES = frozenset({"property", "figure_extract"})
+
+
+class RunCancelled(RuntimeError):
+    """用户取消当前抽取。"""
+
+
+def resolve_model_endpoint(ws_cfg: dict, model_id: str | None) -> tuple[str | None, str | None]:
+    if not model_id:
+        return None, None
+    model_cfg = next((m for m in ws_cfg.get("models", []) if m.get("id") == model_id), None)
+    if not model_cfg:
+        return None, None
+    return model_cfg.get("model"), model_cfg.get("base_url")
+
+
+def _raise_if_cancelled(state: dict | None) -> None:
+    if not state:
+        return
+    fn = state.get("cancel_check")
+    if callable(fn) and fn():
+        raise RunCancelled("抽取已取消")
+
+
 def build_entity_prompt(field_config: dict, text: str) -> str:
     fields = field_config.get("fields", {})
     rules = dict(field_config.get("rules") or {})
@@ -183,14 +209,13 @@ def build_entity_prompt(field_config: dict, text: str) -> str:
         "paper_metadata": {f: _entity_field_slot(f) for f in fields.get("metadata", [])},
         "samples": [{f: _entity_field_slot(f) for f in fields.get("sample", [])}],
         "conditions": [_condition_schema_fields(fields)],
-        "figures": [{f: _entity_field_slot(f) for f in fields.get("figure", [])}],
     }
     extra = "\n" + CONDITION_SAMPLE_BINDING_RULES + "\n"
     if normalize_document_kind(field_config.get("document_kind")) == "patent":
         extra += "\n" + PATENT_STAGE1_RULES.strip() + "\n"
     return f"""[Stage 1 · 样品-状态骨架]
-你是{domain_hint}结构化抽取专家。本阶段只建立样品与状态的索引，不抽具体性能数值。
-每个非标识字段必须是 {{value, unit, excerpt, location}} 对象：excerpt 为原文原句（可高亮），location 为章节/表号；标识字段（sample_id / condition_id / figure_id / placeholder_index）保持字符串。
+你是{domain_hint}结构化抽取专家。本阶段只建立样品与状态的索引，不抽具体性能数值，也不抽取图片 figures（图片另有独立步骤）。
+每个非标识字段必须是 {{value, unit, excerpt, location}} 对象：excerpt 为原文原句（可高亮），location 为章节/表号；标识字段（sample_id / condition_id）保持字符串。
 每个 condition 必须填写 sample_id，指向已有样品。
 严格输出如下 JSON（不要 markdown 代码块，第一个字符是 {{）：
 
@@ -199,6 +224,53 @@ def build_entity_prompt(field_config: dict, text: str) -> str:
 ## 抽取规则
 {_fmt_rules(rules, rule_keys)}
 {extra}
+## 论文正文（已剪裁）
+{text}
+"""
+
+
+def build_figure_extract_prompt(field_config: dict, text: str, entity: dict,
+                                batch_labels: list[str] | None = None) -> str:
+    """图片抽取专用 prompt：在已有骨架上补充 figures。"""
+    fields = field_config.get("fields", {})
+    rules = field_config.get("rules") or {}
+    domain_hint = field_config.get("domain_hint") or "材料文献"
+    fig_fields = fields.get("figure") or []
+    rule_keys = [f"figure.{f}" for f in fig_fields]
+    schema = {
+        "figures": [{f: _entity_field_slot(f) for f in fig_fields}],
+    }
+    skeleton = {
+        "samples": [
+            {
+                "sample_id": s.get("sample_id"),
+                "sample_name": s.get("sample_name"),
+            }
+            for s in (entity or {}).get("samples") or []
+        ],
+        "conditions": condition_skeleton_from_entity(entity or {}),
+    }
+    batch_note = ""
+    if batch_labels:
+        batch_note = (
+            "\n本批只处理这些图片标签（勿输出未列出的图）：\n- "
+            + "\n- ".join(batch_labels)
+            + "\n"
+        )
+    return f"""[Stage · 图片抽取]
+你是{domain_hint}结构化抽取专家。本阶段只抽取图片 figures，并尽量关联到已有 sample_id / condition_id。
+不要新增样品或状态，不要输出性能数值。
+标识字段 figure_id / placeholder_index 保持字符串；其余字段用 {{value, unit, excerpt, location}}。
+严格输出如下 JSON（不要 markdown 代码块，第一个字符是 {{）：
+
+{json.dumps(schema, ensure_ascii=False, indent=2)}
+
+## 已有样品-状态骨架（只读约束）
+{json.dumps(skeleton, ensure_ascii=False, indent=2)}
+{batch_note}
+## 抽取规则
+{_fmt_rules(rules, rule_keys)}
+
 ## 论文正文（已剪裁）
 {text}
 """
@@ -465,19 +537,35 @@ def build_reextract_entity_prompt(field_config: dict, field: dict,
 """
 
 
+def _ensure_figure_extract_step(steps: list, field_config: dict) -> list:
+    """有图片字段时在末尾注入 figure_extract；去掉旧的用户可见 figure 过滤步。"""
+    fields = field_config.get("fields") or {}
+    out = [s for s in (steps or []) if s.get("type") != "figure"]
+    has_fig_fields = bool(fields.get("figure"))
+    if not has_fig_fields:
+        return [s for s in out if s.get("type") != "figure_extract"]
+    if any(s.get("type") == "figure_extract" for s in out):
+        return out
+    out.append({
+        "id": "figure_extract",
+        "type": "figure_extract",
+        "name": "图片抽取",
+    })
+    return out
+
+
 def get_steps(field_config: dict) -> list:
     """返回抽取步骤序列；未配置 steps 时按 fields 合成默认序列（向后兼容）。"""
     steps = field_config.get("steps")
     if steps:
-        return steps
-    fields = field_config.get("fields", {})
-    out = [{"id": "entity", "type": "entity", "name": "Stage1 · 样品-状态骨架"}]
-    if fields.get("property"):
-        out.append({"id": "property", "type": "property", "name": "Stage2 · 性能",
-                    "group": "properties", "fields": fields["property"]})
-    if fields.get("figure"):
-        out.append({"id": "figures", "type": "figure", "name": "Stage3 · 图片分类"})
-    return out
+        out = list(steps)
+    else:
+        fields = field_config.get("fields", {})
+        out = [{"id": "entity", "type": "entity", "name": "Stage1 · 样品-状态骨架"}]
+        if fields.get("property"):
+            out.append({"id": "property", "type": "property", "name": "Stage2 · 性能",
+                        "group": "properties", "fields": fields["property"]})
+    return _ensure_figure_extract_step(out, field_config)
 
 
 # ---------------------------------------------------------------------------
@@ -771,15 +859,16 @@ def paper_title_from_md(text: str) -> str | None:
     return first_heading
 
 
-def _paper_extract_status(root: Path, project_cfg: dict, paper_id: str) -> tuple[str, str | None, bool]:
-    """返回 (latest_status, error, has_any_success)。
+def _paper_extract_status(root: Path, project_cfg: dict, paper_id: str) -> tuple[str, str | None, bool, bool]:
+    """返回 (latest_status, error, has_any_success, skeleton_done)。
 
     latest_status: success | failed | none
     has_any_success: 是否存在可复核的合并结果（旧成功 run 仍可进复核侧栏）。
+    skeleton_done: 最新 run 是否已写出骨架（entities）。
     """
     runs = list_runs(root, project_cfg, paper_id)
     if not runs:
-        return "none", None, False
+        return "none", None, False, False
     has_success = False
     for meta in runs:
         if meta.get("status") == "failed":
@@ -789,25 +878,27 @@ def _paper_extract_status(root: Path, project_cfg: dict, paper_id: str) -> tuple
             has_success = True
             break
     latest = runs[0]
+    skeleton_done = bool(latest.get("skeleton_done"))
     run_dir = Path(root) / project_cfg["test_runs"] / latest["partition"] / latest["run_id"]
     paper_path = run_dir / "merged_outputs" / "paper.json"
     if latest.get("status") == "failed" or not paper_path.exists():
         err = latest.get("error") or "抽取未完成"
-        return "failed", str(err), has_success
-    return "success", None, True
+        return "failed", str(err), has_success, skeleton_done
+    return "success", None, True, skeleton_done
 
 
 def list_paper_records(root: Path, project_cfg: dict) -> list:
     records = []
     for pid in list_papers(root, project_cfg):
         text = get_paper_text(root, project_cfg, pid) or ""
-        status, err, has_success = _paper_extract_status(root, project_cfg, pid)
+        status, err, has_success, skeleton_done = _paper_extract_status(root, project_cfg, pid)
         rec = {
             "paper_id": pid,
             "title": paper_title_from_md(text),
             "parsed": True,
             "extracted": has_success,
             "extract_status": status,
+            "extract_skeleton_done": skeleton_done,
         }
         if err:
             rec["extract_error"] = err
@@ -858,8 +949,96 @@ def list_runs(root: Path, project_cfg: dict, paper_id: str | None = None) -> lis
                     meta = {}
                 if paper_id and meta.get("paper_id") != paper_id:
                     continue
-                runs.append({"run_id": d.name, "partition": partition, **meta})
+                rec = {"run_id": d.name, "partition": partition, **meta}
+                rec["skeleton_done"] = _run_skeleton_done(rec, d)
+                runs.append(rec)
     return runs
+
+
+def _run_skeleton_done(meta: dict, run_dir: Path) -> bool:
+    completed = [str(x) for x in (meta.get("completed_steps") or [])]
+    if any(sid == "entity" or str(sid).endswith("entity") for sid in completed):
+        return True
+    ent = run_dir / "entities"
+    return ent.is_dir() and any(ent.glob("*.json"))
+
+
+_ARTIFACT_MAX_CHARS = 200_000
+_ARTIFACT_ROOT_FILES = ("RUN_INFO.json", "summary.md")
+_ARTIFACT_GROUPS = (
+    ("output", ("merged_outputs", "entities", "properties")),
+    ("note", ("review_notes",)),
+    ("log", ("logs",)),
+    ("prompt", ("prompt_preview",)),
+)
+_ARTIFACT_KIND_RANK = {"output": 0, "note": 1, "log": 2, "meta": 3, "prompt": 4}
+
+
+def get_run_artifacts(root: Path, project_cfg: dict, paper_id: str, run_id: str) -> dict:
+    """返回某 run 的抽取产物（paper.json / entity / properties）及 prompt、失败日志。"""
+    paper_id = (paper_id or "").strip()
+    run_id = (run_id or "").strip()
+    if not paper_id or not run_id:
+        raise ValueError("需要 paper_id 与 run_id")
+    if Path(run_id).name != run_id or run_id in (".", ".."):
+        raise ValueError("非法 run_id")
+
+    runs = list_runs(root, project_cfg, paper_id)
+    meta = next((r for r in runs if r.get("run_id") == run_id), None)
+    if not meta:
+        raise FileNotFoundError(f"未找到该文献下的 run: {run_id}")
+
+    base = (Path(root) / project_cfg.get("test_runs", "")).resolve()
+    run_dir = (base / meta["partition"] / run_id).resolve()
+    try:
+        run_dir.relative_to(base)
+    except ValueError as exc:
+        raise ValueError("拒绝读取：路径越界") from exc
+    if not run_dir.is_dir():
+        raise FileNotFoundError(f"run 目录不存在: {run_id}")
+
+    files: list[dict] = []
+    candidates: list[tuple[str, Path]] = []
+    for name in _ARTIFACT_ROOT_FILES:
+        p = run_dir / name
+        if p.is_file():
+            candidates.append(("meta", p))
+    for kind, subs in _ARTIFACT_GROUPS:
+        for sub in subs:
+            d = run_dir / sub
+            if not d.is_dir():
+                continue
+            for p in sorted(d.iterdir()):
+                if p.is_file() and p.suffix.lower() in {".txt", ".json", ".md", ".log"}:
+                    candidates.append((kind, p))
+
+    seen: set[str] = set()
+    for kind, path in candidates:
+        rel = path.relative_to(run_dir).as_posix()
+        if rel in seen:
+            continue
+        seen.add(rel)
+        raw = path.read_bytes()
+        text = raw.decode("utf-8", errors="replace")
+        truncated = False
+        if len(text) > _ARTIFACT_MAX_CHARS:
+            text = text[:_ARTIFACT_MAX_CHARS]
+            truncated = True
+        files.append({
+            "name": rel,
+            "kind": kind,
+            "bytes": len(raw),
+            "truncated": truncated,
+            "text": text,
+        })
+    files.sort(key=lambda f: (_ARTIFACT_KIND_RANK.get(f.get("kind"), 9), f.get("name") or ""))
+    return {
+        "run_id": run_id,
+        "paper_id": paper_id,
+        "partition": meta.get("partition"),
+        "run_info": meta,
+        "files": files,
+    }
 
 
 def delete_run(root: Path, project_cfg: dict, paper_id: str, run_id: str) -> dict:
@@ -907,8 +1086,155 @@ def delete_run(root: Path, project_cfg: dict, paper_id: str, run_id: str) -> dic
     }
 
 
+def delete_paper(root: Path, project_cfg: dict, paper_id: str) -> dict:
+    """硬删除一篇文献：parsed_results 下该目录 + 该 paper_id 的全部 runs。"""
+    import shutil
+
+    root = Path(root)
+    paper_id = (paper_id or "").strip()
+    if not paper_id or Path(paper_id).name != paper_id or paper_id in (".", ".."):
+        raise ValueError("非法 paper_id")
+
+    parsed_key = project_cfg.get("parsed_results") or ""
+    if not parsed_key:
+        raise ValueError("项目未配置 parsed_results")
+    parsed_root = (root / parsed_key).resolve()
+    paper_dir = (parsed_root / paper_id).resolve()
+    try:
+        paper_dir.relative_to(parsed_root)
+    except ValueError as exc:
+        raise ValueError("拒绝删除：路径越界") from exc
+
+    deleted_runs: list[dict] = []
+    for meta in list_runs(root, project_cfg, paper_id):
+        deleted_runs.append(delete_run(root, project_cfg, paper_id, meta["run_id"]))
+
+    deleted_parsed = None
+    if paper_dir.is_dir():
+        shutil.rmtree(paper_dir)
+        deleted_parsed = str(paper_dir)
+    elif not deleted_runs:
+        raise FileNotFoundError(f"文献不存在: {paper_id}")
+
+    return {
+        "ok": True,
+        "paper_id": paper_id,
+        "deleted_parsed": deleted_parsed,
+        "deleted_runs": deleted_runs,
+    }
+
+
+def run_id_model_slug(model_id: str | None) -> str:
+    """把 model_id 收成可进目录名的片段；缺省为 default。"""
+    raw = (model_id or "").strip() or "default"
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip(".-_")
+    return slug or "default"
+
+
+def build_run_id(mode: str, model_id: str | None = None,
+                 *, stamp: str | None = None, existing: set[str] | None = None) -> str:
+    """生成带模式与模型的 run_id：{stamp}_{mode}_{model_slug}[_{n}]。"""
+    stamp = stamp or datetime.now().strftime("%Y%m%d_%H%M%S")
+    mode_part = (mode or "two_stage").strip() or "two_stage"
+    slug = run_id_model_slug(model_id)
+    base = f"{stamp}_{mode_part}_{slug}"
+    if not existing:
+        return base
+    if base not in existing:
+        return base
+    n = 1
+    while f"{base}_{n}" in existing:
+        n += 1
+    return f"{base}_{n}"
+
+
 def _empty_entity() -> dict:
     return {"paper_metadata": {}, "samples": [], "conditions": [], "figures": []}
+
+
+def _checkpoint_run(state: dict, *, status: str = "running") -> None:
+    """每步成功后把 completed_steps 写入 RUN_INFO，便于失败后续跑。"""
+    run_dir = state.get("run_dir")
+    if not run_dir:
+        return
+    run_dir = Path(run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    backend = state.get("backend")
+    info_path = run_dir / "RUN_INFO.json"
+    prev = {}
+    if info_path.exists():
+        try:
+            prev = json.loads(info_path.read_text(encoding="utf-8"))
+        except Exception:
+            prev = {}
+    info = {
+        **prev,
+        "run_id": state.get("run_id"),
+        "project_id": state.get("project_id"),
+        "paper_id": state.get("paper_id"),
+        "mode": state.get("mode"),
+        "partition": state.get("partition"),
+        "backend": getattr(backend, "name", None) or prev.get("backend") or "",
+        "created_at": state.get("created_at") or prev.get("created_at"),
+        "status": status,
+        "completed_steps": list(state.get("completed_steps") or []),
+        "invalidated_steps": list(state.get("invalidated_steps") or []),
+        "parse_skipped": bool(state.get("parse_skipped", True)),
+        "samples": len((state.get("entity") or {}).get("samples") or []),
+        "conditions": len((state.get("entity") or {}).get("conditions") or []),
+        "template_id": state.get("template_id"),
+        "model_id": state.get("model_id") or run_id_model_slug(state.get("model_id")),
+    }
+    info_path.write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def find_resumable_run(
+    root: Path,
+    project_cfg: dict,
+    paper_id: str,
+    *,
+    mode: str = "two_stage",
+    partition: str = "test",
+    model_id: str | None = None,
+) -> str | None:
+    """找同篇、同模式、同模型、骨架已完成但未成功结束的 run，供续跑。"""
+    want_model = (model_id or "").strip()
+    for meta in list_runs(root, project_cfg, paper_id):
+        if (meta.get("mode") or "two_stage") != (mode or "two_stage"):
+            continue
+        if (meta.get("partition") or "test") != (partition or "test"):
+            continue
+        got_model = (meta.get("model_id") or "").strip()
+        if want_model and got_model and want_model != got_model:
+            continue
+        if meta.get("status") == "success":
+            continue
+        completed = list(meta.get("completed_steps") or [])
+        run_dir = Path(root) / project_cfg.get("test_runs", "") / meta.get("partition", partition) / meta["run_id"]
+        has_entity_file = any((run_dir / "entities").glob("*.json")) if (run_dir / "entities").exists() else False
+        if "entity" in completed or any(sid.endswith("entity") or sid == "entity" for sid in completed) or has_entity_file:
+            # 确认至少有一个 entity 类型步完成，或磁盘已有骨架
+            return meta["run_id"]
+    return None
+
+
+def _infer_completed_from_disk(state: dict) -> None:
+    """旧失败 run 可能没写 completed_steps，用磁盘产物补齐。"""
+    run_dir = Path(state["run_dir"])
+    done = list(state.get("completed_steps") or [])
+    for step in get_steps(state["field_config"]):
+        sid = step.get("id")
+        stype = step.get("type")
+        if sid in done:
+            continue
+        if stype == "entity" and (run_dir / "entities" / f"{sid}.json").exists():
+            done.append(sid)
+        elif stype == "property" and (run_dir / "properties" / f"{sid}_clean.json").exists():
+            done.append(sid)
+        elif stype in ("figure", "figure_extract") and (
+                run_dir / "properties" / f"{sid}_figures.json").exists():
+            done.append(sid)
+    state["completed_steps"] = done
 
 
 def _skeleton_done(state: dict) -> bool:
@@ -925,7 +1251,71 @@ def _find_step(field_config: dict, step_id: str) -> dict:
 
 
 def _downstream_steps(field_config: dict) -> list:
-    return [s for s in get_steps(field_config) if s.get("type") in ("property", "figure")]
+    return [
+        s for s in get_steps(field_config)
+        if s.get("type") in ("property", "figure", "figure_extract")
+    ]
+
+
+def _merge_figure_rows(batches: list[list]) -> list:
+    """按 figure_id / placeholder_index 合并分批结果，后者覆盖前者同键。"""
+    by_key: dict = {}
+    order: list = []
+    for rows in batches:
+        for fig in rows or []:
+            if not isinstance(fig, dict):
+                continue
+            key = fig.get("figure_id") or fig.get("placeholder_index") or id(fig)
+            if key not in by_key:
+                order.append(key)
+            by_key[key] = fig
+    return [by_key[k] for k in order]
+
+
+def _run_figure_extract_llm(state: dict, step_id: str) -> list:
+    """分批调用 LLM 抽取 figures，返回合并后的原始列表。"""
+    images = list(state.get("images_payload") or [])
+    field_config = state["field_config"]
+    text = state["trimmed_text"]
+    entity = state.get("entity") or {}
+    run_dir = state["run_dir"]
+    batches: list[list] = []
+    if not images:
+        prompt = build_figure_extract_prompt(field_config, text, entity, None)
+        state["prompts"][step_id] = prompt
+        (run_dir / "prompt_preview" / f"{step_id}_prompt.txt").write_text(
+            prompt, encoding="utf-8")
+        raw = _call_backend_json(
+            state, "材料文献结构化抽取专家", prompt, None,
+            {"stage": "figure_extract", "step_id": step_id, "paper_id": state["paper_id"]},
+        )
+        return list((raw or {}).get("figures") or [])
+
+    multi = len(images) > FIGURE_EXTRACT_BATCH_SIZE
+    for bi in range(0, len(images), FIGURE_EXTRACT_BATCH_SIZE):
+        chunk = images[bi:bi + FIGURE_EXTRACT_BATCH_SIZE]
+        batch_idx = bi // FIGURE_EXTRACT_BATCH_SIZE
+        labels = [str(im.get("label") or f"Image {bi + j}") for j, im in enumerate(chunk)]
+        prompt = build_figure_extract_prompt(field_config, text, entity, labels)
+        prompt_name = (
+            f"{step_id}_batch{batch_idx}_prompt.txt" if multi else f"{step_id}_prompt.txt"
+        )
+        if batch_idx == 0:
+            state["prompts"][step_id] = prompt
+        (run_dir / "prompt_preview" / prompt_name).write_text(prompt, encoding="utf-8")
+        hint_step = f"{step_id}_batch{batch_idx}" if multi else step_id
+        raw = _call_backend_json(
+            state, "材料文献结构化抽取专家", prompt, chunk,
+            {
+                "stage": "figure_extract",
+                "step_id": hint_step,
+                "paper_id": state["paper_id"],
+            },
+        )
+        (run_dir / "properties" / f"{hint_step}_raw.json").write_text(
+            json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+        batches.append(list((raw or {}).get("figures") or []))
+    return _merge_figure_rows(batches)
 
 
 def _clear_properties_dir(run_dir: Path) -> None:
@@ -967,7 +1357,7 @@ def _load_run_artifacts(state: dict) -> None:
                         clean_path.read_text(encoding="utf-8"))
                 except Exception:
                     pass
-        elif stype == "figure":
+        elif stype in ("figure", "figure_extract"):
             fig_path = run_dir / "properties" / f"{sid}_figures.json"
             if fig_path.exists():
                 try:
@@ -975,7 +1365,8 @@ def _load_run_artifacts(state: dict) -> None:
                 except Exception:
                     figures = []
     state["property_groups"] = property_groups
-    if not any(s.get("type") == "figure" for s in get_steps(state["field_config"])):
+    steps_now = get_steps(state["field_config"])
+    if not any(s.get("type") in ("figure", "figure_extract") for s in steps_now):
         figures = entity.get("figures", [])
     state["figures"] = figures
 
@@ -1003,7 +1394,10 @@ def _write_run_outputs(state: dict) -> dict:
         state["warnings"].append(w)
         seen.add(key)
     property_groups = state["property_groups"]
-    if not any(s.get("type") == "figure" for s in steps):
+    has_fig_llm = any(s.get("type") in ("figure", "figure_extract") for s in steps)
+    if not has_fig_llm:
+        _apply_figure_policy(state, state["apply_rules"])
+    elif not state.get("figures") and (state.get("entity") or {}).get("figures"):
         _apply_figure_policy(state, state["apply_rules"])
     figures = state["figures"]
 
@@ -1046,9 +1440,8 @@ def _write_run_outputs(state: dict) -> dict:
         "completed_steps": list(state.get("completed_steps") or []),
         "invalidated_steps": list(state.get("invalidated_steps") or []),
         "parse_skipped": bool(state.get("parse_skipped", True)),
+        "model_id": state.get("model_id") or run_id_model_slug(state.get("model_id")),
     }
-    if state.get("model_id"):
-        run_info["model_id"] = state["model_id"]
     state["run_info"] = run_info
     (run_dir / "RUN_INFO.json").write_text(
         json.dumps(run_info, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1059,20 +1452,15 @@ def _write_run_outputs(state: dict) -> dict:
 
 def _prepare_run(root: Path, project_id: str, paper_id: str, *,
                  mode: str = "two_stage", partition: str = "test",
-                 model_id: str | None = None, run_id: str | None = None) -> dict:
+                 model_id: str | None = None, run_id: str | None = None,
+                 cancel_check=None) -> dict:
     """建/接 run 目录、解析文本、trim；返回可执行步骤的 run_state。"""
     root = Path(root)
     ws_cfg = load_workspace_config(root)
     project_cfg = ws_cfg["projects"].get(project_id)
     if not project_cfg:
         raise ValueError(f"未知项目: {project_id}")
-    if model_id and project_cfg.get("backend") == "claude":
-        model_cfg = next((m for m in ws_cfg.get("models", []) if m.get("id") == model_id), None)
-        if model_cfg:
-            if model_cfg.get("model"):
-                os.environ["LLM_MODEL"] = model_cfg["model"]
-            if model_cfg.get("base_url"):
-                os.environ["LLM_BASE_URL"] = model_cfg["base_url"]
+    model_name, model_base = resolve_model_endpoint(ws_cfg, model_id)
 
     field_config = load_field_config(root, project_cfg)
     parsed_dir = _resolve_parsed_dir(root, project_cfg)
@@ -1080,7 +1468,12 @@ def _prepare_run(root: Path, project_id: str, paper_id: str, *,
     if not paper_md.exists():
         raise FileNotFoundError(f"paper.md 不存在: {paper_md}")
 
-    backend = get_backend(project_cfg.get("backend", "claude"), root)
+    backend = get_backend(
+        project_cfg.get("backend", "claude"),
+        root,
+        model=model_name,
+        base_url=model_base,
+    )
     apply_rules = mode != "single_pass"
 
     parsed = parse_paper_md(paper_id, paper_md)
@@ -1116,14 +1509,10 @@ def _prepare_run(root: Path, project_id: str, paper_id: str, *,
             except Exception:
                 pass
     else:
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_id = f"{stamp}_{mode}"
-        run_dir = Path(root) / project_cfg["test_runs"] / partition / run_id
-        n = 1
-        while run_dir.exists():
-            run_id = f"{stamp}_{mode}_{n}"
-            run_dir = Path(root) / project_cfg["test_runs"] / partition / run_id
-            n += 1
+        runs_base = Path(root) / project_cfg["test_runs"] / partition
+        existing = {p.name for p in runs_base.iterdir()} if runs_base.is_dir() else set()
+        run_id = build_run_id(mode, model_id, existing=existing)
+        run_dir = runs_base / run_id
 
     for sub in ("prompt_preview", "inputs", "entities", "properties", "merged_outputs", "review_notes", "logs"):
         (run_dir / sub).mkdir(parents=True, exist_ok=True)
@@ -1162,9 +1551,11 @@ def _prepare_run(root: Path, project_id: str, paper_id: str, *,
         "template_id": template_id,
         "created_at": created_at,
         "resume": resume,
+        "cancel_check": cancel_check,
     }
     if resume:
         _load_run_artifacts(state)
+        _infer_completed_from_disk(state)
         # 恢复已有校验警告
         warn_path = run_dir / "review_notes" / "validation_warnings.json"
         if warn_path.exists():
@@ -1177,6 +1568,7 @@ def _prepare_run(root: Path, project_id: str, paper_id: str, *,
 
 def _execute_step(state: dict, step: dict) -> None:
     """执行单个抽取步骤，更新 state 并落中间产物。"""
+    _raise_if_cancelled(state)
     stype = step.get("type")
     sid = step.get("id", stype)
     sname = step.get("name", sid)
@@ -1191,9 +1583,10 @@ def _execute_step(state: dict, step: dict) -> None:
         prompt = build_entity_prompt(field_config, state["trimmed_text"])
         state["prompts"][sid] = prompt
         (run_dir / "prompt_preview" / f"{sid}_prompt.txt").write_text(prompt, encoding="utf-8")
-        ent = backend.call_json(
-            "材料文献结构化抽取专家", prompt, state["images_payload"],
-            hint={"stage": "entity", "step_id": sid, "paper_id": paper_id},
+        # 骨架不传图、不抽 figures，降低截断 / 503
+        ent = _call_backend_json(
+            state, "材料文献结构化抽取专家", prompt, None,
+            {"stage": "entity", "step_id": sid, "paper_id": paper_id},
         )
         ent = normalize_entity_provenance(ent if isinstance(ent, dict) else {})
         ent, bind_warnings = bind_condition_sample_ids(ent)
@@ -1202,8 +1595,10 @@ def _execute_step(state: dict, step: dict) -> None:
             entity["paper_metadata"].update(ent.get("paper_metadata") or {})
         entity["samples"].extend(ent.get("samples") or [])
         entity["conditions"].extend(ent.get("conditions") or [])
-        entity["figures"].extend(ent.get("figures") or [])
+        # 忽略模型若仍返回的 figures；图片改由 figure_extract 步处理
+        entity["figures"] = []
         state["entity"] = entity
+        state["figures"] = []
         state["condition_ids"] = [c.get("condition_id") for c in entity["conditions"]]
         state["warnings"] = [
             w for w in state.get("warnings") or []
@@ -1211,7 +1606,8 @@ def _execute_step(state: dict, step: dict) -> None:
         ]
         state["warnings"].extend(bind_warnings)
         (run_dir / "entities" / f"{sid}.json").write_text(
-            json.dumps(ent, ensure_ascii=False, indent=2), encoding="utf-8")
+            json.dumps({k: ent.get(k) for k in ("paper_metadata", "samples", "conditions")
+                        if k in ent}, ensure_ascii=False, indent=2), encoding="utf-8")
         state["step_reports"].append({
             "id": sid, "name": sname, "type": stype,
             "output": {"samples": entity["samples"], "conditions": entity["conditions"]},
@@ -1228,9 +1624,9 @@ def _execute_step(state: dict, step: dict) -> None:
             state["trimmed_text"])
         state["prompts"][sid] = prompt
         (run_dir / "prompt_preview" / f"{sid}_prompt.txt").write_text(prompt, encoding="utf-8")
-        raw = backend.call_json(
-            "材料文献结构化抽取专家", prompt, None,
-            hint={"stage": "property", "step_id": sid, "paper_id": paper_id},
+        raw = _call_backend_json(
+            state, "材料文献结构化抽取专家", prompt, None,
+            {"stage": "property", "step_id": sid, "paper_id": paper_id},
         )
         (run_dir / "properties" / f"{sid}_raw.json").write_text(
             json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1270,7 +1666,26 @@ def _execute_step(state: dict, step: dict) -> None:
             "output": cleaned, "warnings": step_warnings,
         })
 
+    elif stype == "figure_extract":
+        if mode == "entity_only":
+            return
+        raw_figs = _run_figure_extract_llm(state, sid)
+        state["entity"]["figures"] = raw_figs
+        figures, fig_warnings = classify_figures(
+            raw_figs, field_config, apply_filter=apply_rules)
+        state["figures"] = figures
+        state["warnings"] = [w for w in state["warnings"] if w.get("type") != "figure_dropped"]
+        if apply_rules:
+            state["warnings"].extend(fig_warnings)
+        (run_dir / "properties" / f"{sid}_figures.json").write_text(
+            json.dumps(figures, ensure_ascii=False, indent=2), encoding="utf-8")
+        state["step_reports"].append({
+            "id": sid, "name": sname, "type": stype,
+            "output": figures, "warnings": fig_warnings if apply_rules else [],
+        })
+
     elif stype == "figure":
+        # 兼容旧 run：仅规则过滤，不再作为主抽图路径
         figures, fig_warnings = classify_figures(
             state["entity"].get("figures", []), field_config, apply_filter=apply_rules)
         state["figures"] = figures
@@ -1291,6 +1706,7 @@ def _execute_step(state: dict, step: dict) -> None:
     completed = [x for x in state["completed_steps"] if x != sid]
     completed.append(sid)
     state["completed_steps"] = completed
+    _checkpoint_run(state)
 
 
 def _invalidate_downstream(state: dict) -> list:
@@ -1308,11 +1724,14 @@ def _invalidate_downstream(state: dict) -> list:
             stype = step.get("type")
             if stype == "property" and (state["run_dir"] / "properties" / f"{sid}_clean.json").exists():
                 invalidated.append(sid)
-            elif stype == "figure" and (state["run_dir"] / "properties" / f"{sid}_figures.json").exists():
+            elif stype in ("figure", "figure_extract") and (
+                    state["run_dir"] / "properties" / f"{sid}_figures.json").exists():
                 invalidated.append(sid)
 
     _clear_properties_dir(state["run_dir"])
     state["property_groups"] = {}
+    if isinstance(state.get("entity"), dict):
+        state["entity"]["figures"] = []
     state["figures"] = []
     state["warnings"] = [
         w for w in state["warnings"]
@@ -1322,6 +1741,58 @@ def _invalidate_downstream(state: dict) -> list:
     state["invalidated_steps"] = list(invalidated)
     return invalidated
 
+
+
+def dump_llm_failure(run_dir: Path | str | None, step_id: str, exc: BaseException) -> dict:
+    """失败时落盘完整 raw 与 stop_reason；返回写入的相对路径信息。"""
+    if not run_dir:
+        return {}
+    run_dir = Path(run_dir)
+    logs = run_dir / "logs"
+    logs.mkdir(parents=True, exist_ok=True)
+    sid = (step_id or "llm").strip() or "llm"
+    written: dict = {"step_id": sid}
+
+    raw = getattr(exc, "raw_text", None)
+    if raw is None:
+        raw = getattr(exc, "response_body", None)
+    if raw is not None:
+        raw_path = logs / f"{sid}_llm_raw.txt"
+        raw_path.write_text(str(raw), encoding="utf-8")
+        written["raw"] = str(raw_path)
+
+    meta = {
+        "error": str(exc),
+        "error_type": type(exc).__name__,
+        "stop_reason": getattr(exc, "stop_reason", None),
+        "http_status": getattr(exc, "http_status", None),
+    }
+    meta_path = logs / f"{sid}_llm_meta.json"
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    written["meta"] = str(meta_path)
+    return written
+
+
+def _call_backend_json(state: dict, system_prompt: str, text_prompt: str,
+                       images: list | None, hint: dict | None) -> dict:
+    hint = dict(hint or {})
+    sid = hint.get("step_id") or hint.get("stage") or hint.get("field_id") or "llm"
+    stage = str(hint.get("stage") or "")
+    attempts = STEP_LLM_MAX_ATTEMPTS if stage in _RETRYABLE_STAGES else 1
+    last_exc: BaseException | None = None
+    for i in range(1, attempts + 1):
+        _raise_if_cancelled(state)
+        try:
+            return state["backend"].call_json(system_prompt, text_prompt, images, hint)
+        except Exception as exc:
+            last_exc = exc
+            dump_name = str(sid) if attempts == 1 or i == attempts else f"{sid}_try{i}"
+            dump_llm_failure(state.get("run_dir"), dump_name, exc)
+            if i >= attempts:
+                raise
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("LLM 调用失败")
 
 
 def _write_failed_run(state: dict, exc: BaseException) -> None:
@@ -1341,7 +1812,7 @@ def _write_failed_run(state: dict, exc: BaseException) -> None:
         "partition": state.get("partition"),
         "backend": getattr(backend, "name", None) or str(backend or ""),
         "created_at": state.get("created_at") or datetime.now().isoformat(timespec="seconds"),
-        "status": "failed",
+        "status": "cancelled" if isinstance(exc, RunCancelled) else "failed",
         "error": str(exc),
         "completed_steps": list(state.get("completed_steps") or []),
         "invalidated_steps": list(state.get("invalidated_steps") or []),
@@ -1351,9 +1822,14 @@ def _write_failed_run(state: dict, exc: BaseException) -> None:
         "figures": 0,
         "warnings": len(state.get("warnings") or []),
         "template_id": state.get("template_id"),
+        "model_id": state.get("model_id") or run_id_model_slug(state.get("model_id")),
     }
-    if state.get("model_id"):
-        run_info["model_id"] = state["model_id"]
+    stop_reason = getattr(exc, "stop_reason", None)
+    if stop_reason:
+        run_info["stop_reason"] = stop_reason
+    http_status = getattr(exc, "http_status", None)
+    if http_status is not None:
+        run_info["http_status"] = http_status
     (run_dir / "RUN_INFO.json").write_text(
         json.dumps(run_info, ensure_ascii=False, indent=2), encoding="utf-8")
     state["run_info"] = run_info
@@ -1361,14 +1837,32 @@ def _write_failed_run(state: dict, exc: BaseException) -> None:
 
 def run_extraction(root: Path, project_id: str, paper_id: str,
                    mode: str = "two_stage", partition: str = "test",
-                   model_id: str | None = None) -> dict:
+                   model_id: str | None = None, run_id: str | None = None,
+                   force_new: bool = False, cancel_check=None) -> dict:
     state = None
     try:
+        root = Path(root)
+        ws_cfg = load_workspace_config(root)
+        project_cfg = ws_cfg["projects"].get(project_id)
+        if not project_cfg:
+            raise ValueError(f"未知项目: {project_id}")
+        resume_id = None if force_new else run_id
+        if not resume_id and not force_new:
+            resume_id = find_resumable_run(
+                root, project_cfg, paper_id,
+                mode=mode, partition=partition, model_id=model_id,
+            )
         state = _prepare_run(
-            root, project_id, paper_id, mode=mode, partition=partition, model_id=model_id)
+            root, project_id, paper_id, mode=mode, partition=partition,
+            model_id=model_id, run_id=resume_id, cancel_check=cancel_check)
         steps = get_steps(state["field_config"])
+        skipped: list[str] = []
         for step in steps:
             if mode == "entity_only" and step.get("type") != "entity":
+                continue
+            sid = step.get("id")
+            if state.get("resume") and sid in (state.get("completed_steps") or []):
+                skipped.append(sid)
                 continue
             _execute_step(state, step)
         result = _write_run_outputs(state)
@@ -1384,27 +1878,35 @@ def run_extraction(root: Path, project_id: str, paper_id: str,
             "trim_stats": state["trim_stats"],
             "steps": state["step_reports"],
             "prompts": state["prompts"],
+            "resumed": bool(state.get("resume")),
+            "skipped_steps": skipped,
         }
     except Exception as exc:
         if state is not None:
             _write_failed_run(state, exc)
+            try:
+                exc.run_id = state.get("run_id")
+                exc.skeleton_done = _skeleton_done(state)
+            except Exception:
+                pass
         raise
 
 
 def run_step(root: Path, project_id: str, paper_id: str, step_id: str,
              run_id: str | None = None, partition: str = "test",
-             model_id: str | None = None) -> dict:
+             model_id: str | None = None, cancel_check=None) -> dict:
     """分阶段执行单个步骤；重跑骨架时作废并自动重跑全部下游。"""
     state = None
     try:
         state = _prepare_run(
             root, project_id, paper_id,
-            mode="two_stage", partition=partition, model_id=model_id, run_id=run_id)
+            mode="two_stage", partition=partition, model_id=model_id, run_id=run_id,
+            cancel_check=cancel_check)
         step = _find_step(state["field_config"], step_id)
         stype = step.get("type")
         invalidated: list = []
 
-        if stype in ("property", "figure") and not _skeleton_done(state):
+        if stype in ("property", "figure", "figure_extract") and not _skeleton_done(state):
             raise RuntimeError("必须先完成骨架")
 
         if stype == "entity":
@@ -1444,6 +1946,11 @@ def run_step(root: Path, project_id: str, paper_id: str, step_id: str,
     except Exception as exc:
         if state is not None:
             _write_failed_run(state, exc)
+            try:
+                exc.run_id = state.get("run_id")
+                exc.skeleton_done = _skeleton_done(state)
+            except Exception:
+                pass
         raise
 
 
@@ -1556,15 +2063,14 @@ def _reextract_one_paper(root: Path, project_id: str, project_cfg: dict,
             pass
 
     field_config = load_field_config(root, project_cfg)
-    if model_id and project_cfg.get("backend") == "claude":
-        ws_cfg = load_workspace_config(root)
-        model_cfg = next((m for m in ws_cfg.get("models", []) if m.get("id") == model_id), None)
-        if model_cfg:
-            if model_cfg.get("model"):
-                os.environ["LLM_MODEL"] = model_cfg["model"]
-            if model_cfg.get("base_url"):
-                os.environ["LLM_BASE_URL"] = model_cfg["base_url"]
-    backend = get_backend(project_cfg.get("backend", "claude"), root)
+    ws_cfg = load_workspace_config(root)
+    model_name, model_base = resolve_model_endpoint(ws_cfg, model_id)
+    backend = get_backend(
+        project_cfg.get("backend", "claude"),
+        root,
+        model=model_name,
+        base_url=model_base,
+    )
 
     text_path = run_dir / "inputs" / "parsed_text.txt"
     if text_path.exists():

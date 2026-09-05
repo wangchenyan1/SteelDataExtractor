@@ -29,7 +29,9 @@ APP_DIR = ROOT / "app"
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import batch_extract  # noqa: E402
 import config_model  # noqa: E402
+import job_tracker  # noqa: E402
 import pdf_parser  # noqa: E402
 import pipeline  # noqa: E402
 import result_analysis  # noqa: E402
@@ -350,6 +352,8 @@ def _run_payload(out: dict) -> dict:
         "trim_stats": out["trim_stats"],
         "steps": out["steps"],
         "prompts": out["prompts"],
+        "resumed": bool(out.get("resumed")),
+        "skipped_steps": out.get("skipped_steps") or [],
     }
 
 
@@ -359,6 +363,8 @@ def handle_get(route: str, qs: dict) -> tuple[int, dict | BinaryBody]:
 
     if route == "/api/health":
         return 200, {"status": "ok", "root": str(ROOT)}
+    if route == "/api/jobs":
+        return 200, {"jobs": job_tracker.list_jobs()}
     if route == "/api/projects":
         return 200, build_projects_payload()
     if route == "/api/papers":
@@ -396,6 +402,19 @@ def handle_get(route: str, qs: dict) -> tuple[int, dict | BinaryBody]:
     if route == "/api/runs":
         cfg = pipeline.load_workspace_config(ROOT)["projects"].get(_q(qs, "project"), {})
         return 200, {"runs": pipeline.list_runs(ROOT, cfg, _q(qs, "paper_id"))}
+    if route == "/api/run_artifacts":
+        project_id = _q(qs, "project", "")
+        paper_id = _q(qs, "paper_id", "")
+        run_id = _q(qs, "run_id", "")
+        if not project_id or not paper_id or not run_id:
+            return 400, {"error": "需要 project、paper_id 与 run_id"}
+        try:
+            cfg = _project_cfg(project_id)
+            return 200, pipeline.get_run_artifacts(ROOT, cfg, paper_id, run_id)
+        except ValueError as exc:
+            return 400, {"error": str(exc)}
+        except FileNotFoundError as exc:
+            return 404, {"error": str(exc)}
     if route == "/api/result":
         res = latest_result(_q(qs, "project", ""), _q(qs, "paper_id", ""), _q(qs, "run_id"))
         if res is None:
@@ -445,23 +464,44 @@ def handle_get(route: str, qs: dict) -> tuple[int, dict | BinaryBody]:
         if action == "export_results":
             include_rejected = _parse_bool_qs(_q(qs, "include_rejected"), default=True)
             paper_id = _q(qs, "paper_id")
+            paper_ids_raw = _q(qs, "paper_ids") or ""
+            paper_ids = [
+                x.strip()
+                for x in paper_ids_raw.split(",")
+                if x.strip() and _is_safe_paper_id(x.strip())
+            ]
             try:
                 cfg = _project_cfg(project_id)
             except ValueError as exc:
                 return 404, {"error": str(exc)}
-            if paper_id:
-                res = latest_result(project_id, paper_id)
-                if res is None:
-                    return 404, {"error": "暂无运行结果"}
-                return 200, {
-                    "project_id": project_id,
-                    "paper_id": paper_id,
-                    "run_info": res["run_info"],
-                    "result": pipeline.filter_result_by_status(
-                        res["result"], include_rejected=include_rejected
-                    ),
-                    "warnings": res["warnings"],
-                }
+            if paper_id and not paper_ids:
+                paper_ids = [paper_id]
+            if paper_ids:
+                items = []
+                for pid in paper_ids:
+                    res = latest_result(project_id, pid)
+                    if res is None:
+                        continue
+                    items.append({
+                        "paper_id": pid,
+                        "run_info": res["run_info"],
+                        "result": pipeline.filter_result_by_status(
+                            res["result"], include_rejected=include_rejected
+                        ),
+                        "warnings": res["warnings"],
+                    })
+                if not items:
+                    return 404, {"error": "所选文献暂无运行结果"}
+                if len(items) == 1:
+                    one = items[0]
+                    return 200, {
+                        "project_id": project_id,
+                        "paper_id": one["paper_id"],
+                        "run_info": one["run_info"],
+                        "result": one["result"],
+                        "warnings": one["warnings"],
+                    }
+                return 200, {"project_id": project_id, "results": items}
             papers = pipeline.list_papers(ROOT, cfg)
             items = []
             for pid in papers:
@@ -493,13 +533,18 @@ def handle_post(route: str, body: dict, files: dict | None = None) -> tuple[int,
 
     try:
         if route == "/api/projects":
-            overlay = config_model.create_project(
-                ROOT,
-                body.get("id", ""),
-                body.get("name", ""),
-                body.get("template_id", "steel"),
-                body.get("selected_field_ids") or [],
-            )
+            try:
+                overlay = config_model.create_project(
+                    ROOT,
+                    body.get("id", ""),
+                    body.get("name", ""),
+                    body.get("template_id", "steel"),
+                    body.get("selected_field_ids") or [],
+                    document_kind=body.get("document_kind"),
+                    copy_from=body.get("copy_from"),
+                )
+            except ValueError as exc:
+                return 400, {"error": str(exc)}
             return 200, {"ok": True, "overlay": overlay, "id": body.get("id")}
 
         if route == "/api/parse":
@@ -515,34 +560,116 @@ def handle_post(route: str, body: dict, files: dict | None = None) -> tuple[int,
             return 200, result
 
         if route == "/api/run":
-            parse_info = _maybe_parse_before_run(body)
-            out = pipeline.run_extraction(
-                ROOT,
-                body.get("project", ""),
-                body.get("paper_id", ""),
+            job_id = job_tracker.start_job(
+                kind="run",
+                project_id=body.get("project", ""),
+                paper_id=body.get("paper_id", ""),
                 mode=body.get("mode", "two_stage"),
-                partition=body.get("partition", "test"),
-                model_id=body.get("model_id"),
+                model_id=body.get("model_id") or "",
             )
-            payload = _run_payload(out)
-            if parse_info is not None:
-                payload["parse"] = parse_info
-            return 200, payload
+            try:
+                parse_info = _maybe_parse_before_run(body)
+                out = pipeline.run_extraction(
+                    ROOT,
+                    body.get("project", ""),
+                    body.get("paper_id", ""),
+                    mode=body.get("mode", "two_stage"),
+                    partition=body.get("partition", "test"),
+                    model_id=body.get("model_id"),
+                    run_id=body.get("run_id") or None,
+                    force_new=bool(body.get("force_new")),
+                    cancel_check=lambda: job_tracker.is_cancelled(job_id),
+                )
+                payload = _run_payload(out)
+                if parse_info is not None:
+                    payload["parse"] = parse_info
+                job_tracker.finish_job(
+                    job_id, "success",
+                    run_id=payload.get("run_id"),
+                    skeleton_done=True,
+                )
+                return 200, payload
+            except pipeline.RunCancelled as exc:
+                job_tracker.finish_job(
+                    job_id, "cancelled",
+                    run_id=getattr(exc, "run_id", None),
+                    error=str(exc),
+                    skeleton_done=getattr(exc, "skeleton_done", None),
+                )
+                return 200, {"ok": False, "cancelled": True, "error": str(exc)}
+            except Exception as exc:
+                job_tracker.finish_job(
+                    job_id, "failed",
+                    run_id=getattr(exc, "run_id", None),
+                    error=str(exc),
+                    skeleton_done=getattr(exc, "skeleton_done", None),
+                )
+                raise
+
+        if route == "/api/run_batch":
+            try:
+                out = batch_extract.start_batch(
+                    ROOT,
+                    project_id=body.get("project", ""),
+                    paper_ids=body.get("paper_ids") or [],
+                    mode=body.get("mode", "two_stage"),
+                    partition=body.get("partition", "test"),
+                    model_id=body.get("model_id"),
+                    concurrency=body.get("concurrency") or batch_extract.DEFAULT_CONCURRENCY,
+                )
+            except ValueError as exc:
+                return 400, {"error": str(exc)}
+            return 200, out
+
+        if route == "/api/job_cancel":
+            marked = job_tracker.request_cancel(body.get("job_id") or None)
+            return 200, {"ok": True, "cancelled": marked}
 
         if route == "/api/run_step":
-            out = pipeline.run_step(
-                ROOT,
-                body.get("project", ""),
-                body.get("paper_id", ""),
-                body.get("step_id", ""),
-                run_id=body.get("run_id"),
-                partition=body.get("partition", "test"),
-                model_id=body.get("model_id"),
+            job_id = job_tracker.start_job(
+                kind="run_step",
+                project_id=body.get("project", ""),
+                paper_id=body.get("paper_id", ""),
+                mode="",
+                model_id=body.get("model_id") or "",
+                step_id=body.get("step_id") or "",
             )
-            payload = _run_payload(out)
-            payload["step"] = out.get("step")
-            payload["invalidated"] = out.get("invalidated", [])
-            return 200, payload
+            try:
+                out = pipeline.run_step(
+                    ROOT,
+                    body.get("project", ""),
+                    body.get("paper_id", ""),
+                    body.get("step_id", ""),
+                    run_id=body.get("run_id"),
+                    partition=body.get("partition", "test"),
+                    model_id=body.get("model_id"),
+                    cancel_check=lambda: job_tracker.is_cancelled(job_id),
+                )
+                payload = _run_payload(out)
+                payload["step"] = out.get("step")
+                payload["invalidated"] = out.get("invalidated", [])
+                job_tracker.finish_job(
+                    job_id, "success",
+                    run_id=payload.get("run_id"),
+                    skeleton_done=True,
+                )
+                return 200, payload
+            except pipeline.RunCancelled as exc:
+                job_tracker.finish_job(
+                    job_id, "cancelled",
+                    run_id=getattr(exc, "run_id", None),
+                    error=str(exc),
+                    skeleton_done=getattr(exc, "skeleton_done", None),
+                )
+                return 200, {"ok": False, "cancelled": True, "error": str(exc)}
+            except Exception as exc:
+                job_tracker.finish_job(
+                    job_id, "failed",
+                    run_id=getattr(exc, "run_id", None),
+                    error=str(exc),
+                    skeleton_done=getattr(exc, "skeleton_done", None),
+                )
+                raise
 
         if route == "/api/analyze":
             project_id = body.get("project") or ""
@@ -567,6 +694,8 @@ def handle_post(route: str, body: dict, files: dict | None = None) -> tuple[int,
                     run_id_a=body.get("run_id_a") or None,
                     run_id_b=body.get("run_id_b") or None,
                     model_id=body.get("model_id") or None,
+                    focuses=body.get("focuses"),
+                    custom_focus=body.get("custom_focus"),
                 )
             except ValueError as exc:
                 return 400, {"error": str(exc)}
@@ -586,6 +715,35 @@ def handle_post(route: str, body: dict, files: dict | None = None) -> tuple[int,
                 return 404, {"error": str(exc)}
             try:
                 out = pipeline.delete_run(ROOT, cfg, paper_id, run_id)
+            except ValueError as exc:
+                return 400, {"error": str(exc)}
+            except FileNotFoundError as exc:
+                return 404, {"error": str(exc)}
+            return 200, out
+
+        if route == "/api/paper_delete":
+            project_id = body.get("project") or ""
+            paper_id = body.get("paper_id") or ""
+            if not project_id or not paper_id:
+                return 400, {"error": "需要 project 与 paper_id"}
+            try:
+                cfg = _project_cfg(project_id)
+            except ValueError as exc:
+                return 404, {"error": str(exc)}
+            try:
+                out = pipeline.delete_paper(ROOT, cfg, paper_id)
+            except ValueError as exc:
+                return 400, {"error": str(exc)}
+            except FileNotFoundError as exc:
+                return 404, {"error": str(exc)}
+            return 200, out
+
+        if route == "/api/project_delete":
+            project_id = body.get("project") or body.get("project_id") or ""
+            if not project_id:
+                return 400, {"error": "需要 project"}
+            try:
+                out = config_model.delete_project(ROOT, project_id)
             except ValueError as exc:
                 return 400, {"error": str(exc)}
             except FileNotFoundError as exc:

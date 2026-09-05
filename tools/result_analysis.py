@@ -16,8 +16,55 @@ from run_compare import diff_results  # noqa: E402
 
 FOCUS_ORDER = ("value_binding", "process_binding", "figure_judgment")
 VALID_FOCUS = set(FOCUS_ORDER)
+FOCUS_SPECS = {
+    "value_binding": (
+        "value_binding：数值是否准确，且是否挂到正确样品/状态"
+        "（张冠李戴、单位错、摘要目标当实测）"
+    ),
+    "process_binding": (
+        "process_binding：工艺/热处理/轧制/时效是否与该样品或状态对应"
+    ),
+    "figure_judgment": (
+        "figure_judgment：图片判断是否准确（组织图/断后图/类型/用途是否与图注或原文一致）"
+    ),
+}
 VALID_SEVERITY = {"high", "medium", "low"}
 MAX_ISSUES = 12
+CUSTOM_FOCUS = "custom"
+CUSTOM_FOCUS_MAX = 800
+
+
+def normalize_focuses(focuses) -> list[str]:
+    """勾选的内置焦点；None 表示三类全开。空列表表示只靠自定义说明。"""
+    if focuses is None:
+        return list(FOCUS_ORDER)
+    if isinstance(focuses, str):
+        focuses = [x.strip() for x in focuses.replace("，", ",").split(",") if x.strip()]
+    out: list[str] = []
+    for item in focuses or []:
+        key = str(item or "").strip()
+        if key in VALID_FOCUS and key not in out:
+            out.append(key)
+    return out
+
+
+def normalize_custom_focus(text) -> str:
+    return str(text or "").strip()[:CUSTOM_FOCUS_MAX]
+
+
+def resolve_analyze_scope(focuses, custom_focus: str | None) -> tuple[list[str], str]:
+    selected = normalize_focuses(focuses)
+    custom = normalize_custom_focus(custom_focus)
+    if not selected and not custom:
+        raise ValueError("请至少勾选一类检查，或填写自定义检查重点")
+    return selected, custom
+
+
+def allowed_focus_ids(selected: list[str], custom: str) -> list[str]:
+    ids = list(selected)
+    if custom and CUSTOM_FOCUS not in ids:
+        ids.append(CUSTOM_FOCUS)
+    return ids
 
 _PROCESS_KEYS = re.compile(
     r"(process|processing|heat_treat|anneal|age|aging|roll|temper|solution|"
@@ -51,8 +98,8 @@ def _compact_fact(v: Any) -> Any:
     return {k: _compact_fact(x) for k, x in v.items() if not str(k).startswith("_")}
 
 
-def slice_result_for_analysis(result: dict | None) -> dict:
-    """裁成三块：数值绑定 / 工艺 / 图片，控制 token。"""
+def slice_result_for_analysis(result: dict | None, focuses=None) -> dict:
+    """裁成数值绑定 / 工艺 / 图片；可按勾选焦点只留对应切片。"""
     r = result or {}
     values: dict[str, Any] = {"samples": [], "conditions": []}
     process: dict[str, Any] = {"samples": [], "conditions": []}
@@ -133,25 +180,34 @@ def slice_result_for_analysis(result: dict | None) -> dict:
                 keep[k] = _compact_fact(val)
         figures.append(keep)
 
-    return {
+    full = {
         "value_binding": values,
         "process_binding": process,
         "figure_judgment": {"figures": figures},
     }
+    selected = normalize_focuses(focuses) if focuses is not None else list(FOCUS_ORDER)
+    if not selected:
+        return full
+    return {k: full[k] for k in selected if k in full}
 
 
-def filter_diff_for_analysis(diff_rows: list[dict]) -> list[dict]:
-    """只保留与三类焦点相关的 diff 行。"""
+def filter_diff_for_analysis(diff_rows: list[dict], focuses=None) -> list[dict]:
+    """只保留与所选焦点相关的 diff 行。"""
+    selected = normalize_focuses(focuses) if focuses is not None else list(FOCUS_ORDER)
+    if not selected:
+        selected = list(FOCUS_ORDER)
+    want_value = "value_binding" in selected
+    want_process = "process_binding" in selected
+    want_fig = "figure_judgment" in selected
     out = []
     for row in diff_rows or []:
         path = str(row.get("path") or "")
-        if (
-            _VALUE_KEYS.search(path)
-            or _PROCESS_KEYS.search(path)
-            or path.startswith("figures[")
-            or ".composition" in path
-            or "_properties." in path
-        ):
+        hit_value = bool(
+            _VALUE_KEYS.search(path) or ".composition" in path or "_properties." in path
+        )
+        hit_process = bool(_PROCESS_KEYS.search(path))
+        hit_fig = path.startswith("figures[")
+        if (want_value and hit_value) or (want_process and hit_process) or (want_fig and hit_fig):
             out.append(row)
     return out
 
@@ -164,21 +220,31 @@ def build_analyze_prompt(
     diff_rows: list[dict] | None = None,
     mode_a: str | None = None,
     mode_b: str | None = None,
+    focuses=None,
+    custom_focus: str | None = None,
 ) -> tuple[str, str]:
+    selected, custom = resolve_analyze_scope(focuses, custom_focus)
+    allowed = allowed_focus_ids(selected, custom)
+    lines = []
+    for i, fid in enumerate(selected, 1):
+        lines.append(f"{i}) {FOCUS_SPECS[fid]}；")
+    if custom:
+        lines.append(f"{len(lines) + 1}) custom：按用户指定重点检查——{custom}；")
+    focus_enum = "|".join(allowed)
     system = (
-        "你是材料文献抽取结果质检助手。只检查三类硬问题，禁止综述、禁止焦点外评论、禁止建议再抽更多字段："
-        "1) value_binding：数值是否准确，且是否挂到正确样品/状态（张冠李戴、单位错、摘要目标当实测）；"
-        "2) process_binding：工艺/热处理/轧制/时效是否与该样品或状态对应；"
-        "3) figure_judgment：图片判断是否准确（组织图/断后图/类型/用途是否与图注或原文一致）。"
-        "无硬问题则 issues=[]。只输出 JSON。"
+        "你是材料文献抽取结果质检助手。只检查用户指定的硬问题，禁止综述、禁止焦点外评论、禁止建议再抽更多字段："
+        + "".join(lines)
+        + "无硬问题则 issues=[]。只输出 JSON。"
         "summary≤80字；issues最多12条；每条 detail≤120字 suggestion≤60字；不要大段原文。"
-        "每条必须含 focus（value_binding|process_binding|figure_judgment）、"
+        f"每条必须含 focus（{focus_enum}）、"
         "severity（high|medium|low）、category、path、title、detail、suggestion。"
     )
     if analysis_type == "vs_source":
         user = {
             "task": "vs_source",
-            "instruction": "对照原文与抽取切片，只报上述三类硬问题；可 issues=[]。",
+            "instruction": "对照原文与抽取切片，只报用户指定范围内的硬问题；可 issues=[]。",
+            "focuses": allowed,
+            "custom_focus": custom or None,
             "result_slices": sliced or {},
             "source_text": (source_text or "")[:120000],
             "source_note": "原文可能已经过剪裁。",
@@ -186,7 +252,9 @@ def build_analyze_prompt(
     elif analysis_type == "vs_runs":
         user = {
             "task": "vs_runs",
-            "instruction": "根据结构化差异，判断两类抽取在三类焦点上谁更可能对；勿复述全部 diff。",
+            "instruction": "根据结构化差异，判断两边在用户指定焦点上谁更可能对；勿复述全部 diff。",
+            "focuses": allowed,
+            "custom_focus": custom or None,
             "mode_a": mode_a,
             "mode_b": mode_b,
             "diff_rows": diff_rows or [],
@@ -196,7 +264,12 @@ def build_analyze_prompt(
     return system, json.dumps(user, ensure_ascii=False, indent=2)
 
 
-def postprocess_analysis(raw: dict | None, analysis_type: str) -> dict:
+def postprocess_analysis(
+    raw: dict | None,
+    analysis_type: str,
+    *,
+    allowed_focus: list[str] | None = None,
+) -> dict:
     raw = raw if isinstance(raw, dict) else {}
     summary = str(raw.get("summary") or "").strip()
     if len(summary) > 80:
@@ -207,8 +280,12 @@ def postprocess_analysis(raw: dict | None, analysis_type: str) -> dict:
         if not isinstance(it, dict):
             continue
         focus = str(it.get("focus") or "").strip()
-        if focus not in VALID_FOCUS:
-            continue
+        allowed = set(allowed_focus) if allowed_focus else set(VALID_FOCUS)
+        if focus not in allowed:
+            if focus == CUSTOM_FOCUS and CUSTOM_FOCUS in allowed:
+                pass
+            else:
+                continue
         sev = str(it.get("severity") or "medium").lower()
         if sev not in VALID_SEVERITY:
             sev = "medium"
@@ -228,12 +305,12 @@ def postprocess_analysis(raw: dict | None, analysis_type: str) -> dict:
         })
 
     sev_rank = {"high": 0, "medium": 1, "low": 2}
-    focus_rank = {f: i for i, f in enumerate(FOCUS_ORDER)}
+    focus_rank = {f: i for i, f in enumerate(list(FOCUS_ORDER) + [CUSTOM_FOCUS])}
     cleaned.sort(key=lambda x: (sev_rank.get(x["severity"], 9), focus_rank.get(x["focus"], 9)))
     cleaned = cleaned[:MAX_ISSUES]
     return {
         "analysis_type": analysis_type,
-        "summary": summary or ("未发现上述三类硬问题" if not cleaned else "见问题列表"),
+        "summary": summary or ("未发现所选范围内的硬问题" if not cleaned else "见问题列表"),
         "issues": cleaned,
     }
 
@@ -261,17 +338,16 @@ def save_analysis(
 
 def _default_call_json(root: Path, project_cfg: dict, model_id: str | None) -> Callable:
     from llm_backends import get_backend
-    from pipeline import load_workspace_config
+    from pipeline import load_workspace_config, resolve_model_endpoint
 
     ws = load_workspace_config(root)
-    if model_id and project_cfg.get("backend") == "claude":
-        model_cfg = next((m for m in ws.get("models", []) if m.get("id") == model_id), None)
-        if model_cfg:
-            if model_cfg.get("model"):
-                os.environ["LLM_MODEL"] = model_cfg["model"]
-            if model_cfg.get("base_url"):
-                os.environ["LLM_BASE_URL"] = model_cfg["base_url"]
-    backend = get_backend(project_cfg.get("backend", "claude"), root)
+    model_name, model_base = resolve_model_endpoint(ws, model_id)
+    backend = get_backend(
+        project_cfg.get("backend", "claude"),
+        root,
+        model=model_name,
+        base_url=model_base,
+    )
     return lambda system, user: backend.call_json(system, user)
 
 
@@ -341,6 +417,8 @@ def run_analysis(
     run_id_a: str | None = None,
     run_id_b: str | None = None,
     model_id: str | None = None,
+    focuses=None,
+    custom_focus: str | None = None,
     call_json: Callable | None = None,
 ) -> dict:
     """执行分析。call_json(system, user) -> dict，便于测试 mock。"""
@@ -352,6 +430,8 @@ def run_analysis(
 
     root = Path(root)
     created_at = datetime.now().isoformat(timespec="seconds")
+    selected, custom = resolve_analyze_scope(focuses, custom_focus)
+    allowed = allowed_focus_ids(selected, custom)
 
     if analysis_type == "vs_source":
         if run_id:
@@ -372,9 +452,13 @@ def run_analysis(
             source_text = text_path.read_text(encoding="utf-8", errors="replace")
         else:
             source_text = get_paper_text(root, project_cfg, paper_id) or ""
-        sliced = slice_result_for_analysis(result)
+        sliced = slice_result_for_analysis(result, selected)
         system, user = build_analyze_prompt(
-            "vs_source", sliced=sliced, source_text=source_text
+            "vs_source",
+            sliced=sliced,
+            source_text=source_text,
+            focuses=selected,
+            custom_focus=custom,
         )
         anchor_run = meta["run_id"]
         inputs = {"run_id": anchor_run, "run_id_a": None, "run_id_b": None}
@@ -396,12 +480,16 @@ def run_analysis(
             raise FileNotFoundError("对比双方都需要成功的 paper.json")
         ra = json.loads(pa.read_text(encoding="utf-8"))
         rb = json.loads(pb.read_text(encoding="utf-8"))
-        diff_rows = filter_diff_for_analysis(diff_results(ra, rb, include_same=False))
+        diff_rows = filter_diff_for_analysis(
+            diff_results(ra, rb, include_same=False), selected
+        )
         system, user = build_analyze_prompt(
             "vs_runs",
             diff_rows=diff_rows[:200],
             mode_a=meta_a.get("mode"),
             mode_b=meta_b.get("mode"),
+            focuses=selected,
+            custom_focus=custom,
         )
         run_dir = dir_a
         anchor_run = run_id_a
@@ -424,6 +512,8 @@ def run_analysis(
         "created_at": created_at,
         "model_id": model_id,
         "inputs": inputs,
+        "focuses": allowed,
+        "custom_focus": custom or None,
     }
 
     if call_json is None:
@@ -431,7 +521,11 @@ def run_analysis(
 
     try:
         raw = call_json(system, user)
-        processed = postprocess_analysis(raw if isinstance(raw, dict) else {}, analysis_type)
+        processed = postprocess_analysis(
+            raw if isinstance(raw, dict) else {},
+            analysis_type,
+            allowed_focus=allowed,
+        )
         payload = {**base_payload, "status": "success", **processed, "raw_error": None}
         path = save_analysis(run_dir, analysis_type, payload, status="success")
         return {"ok": True, "analysis_id": analysis_id, "path": str(path), "analysis": payload}

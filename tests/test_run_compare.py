@@ -33,10 +33,12 @@ def test_compare_panel_in_review():
 def test_run_option_label_uses_paper_and_mode():
     js = (ROOT / "app/app.js").read_text(encoding="utf-8")
     start = js.index("function runOptionLabel")
-    block = js[start : start + 500]
+    block = js[start : start + 900]
     assert "paper_id" in block
     assert "modeLabel" in block
     assert "${paper}_${mode}" in block or "${paper}_" in block
+    assert "骨架已完成" in block
+    assert "骨架未完成" in block
 
 
 def test_flatten_and_diff_detects_value_change():

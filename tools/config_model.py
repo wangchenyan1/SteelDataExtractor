@@ -24,6 +24,65 @@ _FIELD_KEYS = (
 )
 
 LOCKED_FIELD_IDS = ("sample_id", "condition_id", "figure_id", "placeholder_index")
+PROTECTED_PROJECT_IDS = frozenset({"demo_steel"})
+
+_DOI_IDENTIFIER = {
+    "id": "doi",
+    "label": "DOI",
+    "category": "metadata",
+    "group": None,
+    "value_type": "string",
+    "rule": "填写文献 DOI；可从目录名/paper_id 推断，不要编造。",
+    "positive_examples": "10.1016/j.msea.2005.04.015",
+    "negative_examples": "不要填期刊名或站点首页",
+    "note": "文章级标识，全篇只出现一次。",
+}
+
+_PATENT_NUMBER_IDENTIFIER = {
+    "id": "patent_number",
+    "label": "专利号",
+    "category": "metadata",
+    "group": None,
+    "value_type": "string",
+    "rule": "填写专利号（如 CN110218899B）；可从目录名/paper_id 推断，不要编造。",
+    "positive_examples": "CN110218899B",
+    "negative_examples": "不要填 DOI",
+    "note": "文章级标识，全篇只出现一次。",
+}
+
+
+def apply_document_kind_identifier(overlay: dict) -> dict:
+    """按 document_kind 互斥保留 doi 或 patent_number（私有 metadata）。原地修改并返回 overlay。"""
+    try:
+        from input_trim import normalize_document_kind
+    except ImportError:
+        from tools.input_trim import normalize_document_kind
+
+    kind = normalize_document_kind(overlay.get("document_kind"))
+    overlay["document_kind"] = kind
+    want = "doi" if kind == "paper" else "patent_number"
+    drop = "patent_number" if kind == "paper" else "doi"
+    spec = _DOI_IDENTIFIER if want == "doi" else _PATENT_NUMBER_IDENTIFIER
+
+    selected = [x for x in (overlay.get("selected_field_ids") or []) if x != drop]
+    private = [f for f in (overlay.get("private_fields") or []) if f.get("id") != drop]
+    overrides = dict(overlay.get("field_overrides") or {})
+    overrides.pop(drop, None)
+
+    has_want = any(f.get("id") == want for f in private)
+    if not has_want:
+        private.append(dict(spec))
+    if want not in selected:
+        if "title" in selected:
+            idx = selected.index("title") + 1
+            selected.insert(idx, want)
+        else:
+            selected.insert(0, want)
+
+    overlay["selected_field_ids"] = selected
+    overlay["private_fields"] = private
+    overlay["field_overrides"] = overrides
+    return overlay
 
 
 def _read_json(path: Path) -> Any:
@@ -225,6 +284,7 @@ def save_overlay(root: Path, project_id: str, overlay: dict) -> None:
         from tools.input_trim import normalize_document_kind
 
     overlay["document_kind"] = normalize_document_kind(overlay.get("document_kind"))
+    apply_document_kind_identifier(overlay)
     if overlay.get("steps"):
         overlay["steps"] = strip_empty_property_steps(overlay["steps"])
         template_id = overlay.get("template_id") or "blank"
@@ -288,27 +348,69 @@ def create_project(
     name: str,
     template_id: str,
     selected_field_ids: list[str],
+    document_kind: str | None = None,
+    copy_from: str | None = None,
 ) -> dict:
-    overlay = {
-        "template_id": template_id,
-        "selected_field_ids": list(selected_field_ids),
-        "private_fields": [],
-        "field_overrides": {},
-        "step_overrides": None,
-        "property_source": {},
-        "figure_filter": {},
-        "document_kind": "paper",
-    }
-    library = load_field_library(root, template_id)
+    try:
+        from input_trim import normalize_document_kind
+    except ImportError:
+        from tools.input_trim import normalize_document_kind
+
+    project_id = (project_id or "").strip()
+    if not project_id:
+        raise ValueError("需要项目 ID")
+    kind = normalize_document_kind(document_kind)
+    copy_from = (copy_from or "").strip() or None
+    if copy_from == project_id:
+        raise ValueError("不能复制到相同项目 id")
+
+    if copy_from:
+        cfg_path = root / "configs" / "project_config.json"
+        cfg = _read_json(cfg_path) if cfg_path.exists() else {"projects": {}}
+        if copy_from not in (cfg.get("projects") or {}):
+            raise ValueError(f"复制来源不存在: {copy_from}")
+        src_path = root / "configs" / "projects" / f"{copy_from}.json"
+        if not src_path.exists():
+            raise ValueError(f"复制来源不存在: {copy_from}")
+        src = _read_json(src_path)
+        template_id = src.get("template_id") or "steel"
+        overlay = {
+            "template_id": template_id,
+            "selected_field_ids": list(src.get("selected_field_ids") or []),
+            "private_fields": deepcopy(src.get("private_fields") or []),
+            "field_overrides": deepcopy(src.get("field_overrides") or {}),
+            "steps": deepcopy(src.get("steps") or []),
+            "step_overrides": deepcopy(src.get("step_overrides")),
+            "property_groups": deepcopy(src.get("property_groups") or []),
+            "property_source": deepcopy(src.get("property_source") or {}),
+            "figure_filter": deepcopy(src.get("figure_filter") or {}),
+            "document_kind": kind,
+        }
+    else:
+        overlay = {
+            "template_id": template_id,
+            "selected_field_ids": list(selected_field_ids),
+            "private_fields": [],
+            "field_overrides": {},
+            "step_overrides": None,
+            "property_source": {},
+            "figure_filter": {},
+            "document_kind": kind,
+        }
+
+    library = load_field_library(root, overlay["template_id"])
     lib_ids = {f["id"] for f in library.get("fields") or []}
-    selected = list(selected_field_ids)
+    selected = list(overlay.get("selected_field_ids") or [])
     for lid in LOCKED_FIELD_IDS:
         if lid in lib_ids and lid not in selected:
             selected.append(lid)
     overlay["selected_field_ids"] = selected
-    template = load_template(root, template_id)
+    apply_document_kind_identifier(overlay)
+    template = load_template(root, overlay["template_id"])
     fields = effective_fields(library, overlay)
-    overlay["steps"] = generate_steps(template, fields, overlay)
+    if not overlay.get("steps"):
+        overlay["steps"] = generate_steps(template, fields, overlay)
+    # 校验在写盘前完成；失败不落任何新文件
     save_overlay(root, project_id, overlay)
 
     cfg_path = root / "configs" / "project_config.json"
@@ -318,7 +420,7 @@ def create_project(
         "name": name,
         "runnable": True,
         "backend": "mock",
-        "template_id": template_id,
+        "template_id": overlay["template_id"],
         "overlay": f"configs/projects/{project_id}.json",
         "field_config": f"configs/projects/{project_id}.json",
         "parsed_results": f"parsed_results/{project_id}",
@@ -326,6 +428,72 @@ def create_project(
     }
     _write_json(cfg_path, cfg)
     return overlay
+
+
+def delete_project(root: Path, project_id: str) -> dict:
+    """硬删除项目：配置键、overlay、parsed_results、test_runs。示例项目不可删。"""
+    import shutil
+
+    root = Path(root).resolve()
+    project_id = (project_id or "").strip()
+    if not project_id or Path(project_id).name != project_id or project_id in (".", ".."):
+        raise ValueError("非法项目 ID")
+    if project_id in PROTECTED_PROJECT_IDS:
+        raise ValueError("示例项目不可删除")
+
+    cfg_path = root / "configs" / "project_config.json"
+    if not cfg_path.exists():
+        raise FileNotFoundError("project_config.json 不存在")
+    cfg = _read_json(cfg_path)
+    projects = cfg.get("projects") or {}
+    if project_id not in projects:
+        raise FileNotFoundError(f"项目不存在: {project_id}")
+    entry = projects[project_id] or {}
+    deleted: list[str] = []
+
+    def _safe_rmtree(rel: str, *, allow_example_data: bool = False) -> None:
+        if not rel:
+            return
+        target = (root / rel).resolve()
+        try:
+            target.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"拒绝删除：路径越界 {rel}") from exc
+        if not allow_example_data:
+            example_root = (root / "example_data").resolve()
+            try:
+                target.relative_to(example_root)
+            except ValueError:
+                pass
+            else:
+                raise ValueError(f"拒绝删除 example_data 下路径: {rel}")
+        if target.is_dir():
+            shutil.rmtree(target)
+            deleted.append(str(target))
+        elif target.is_file():
+            target.unlink()
+            deleted.append(str(target))
+
+    _safe_rmtree(entry.get("parsed_results") or f"parsed_results/{project_id}")
+    _safe_rmtree(entry.get("test_runs") or f"test_runs/{project_id}")
+
+    overlay_rel = entry.get("overlay") or f"configs/projects/{project_id}.json"
+    field_rel = entry.get("field_config") or overlay_rel
+    _safe_rmtree(overlay_rel)
+    if field_rel and field_rel != overlay_rel:
+        still_used = any(
+            (p or {}).get("field_config") == field_rel
+            for pid, p in projects.items()
+            if pid != project_id
+        )
+        if not still_used:
+            _safe_rmtree(field_rel)
+
+    del projects[project_id]
+    cfg["projects"] = projects
+    _write_json(cfg_path, cfg)
+    deleted.append(f"project_config:{project_id}")
+    return {"ok": True, "project_id": project_id, "deleted": deleted}
 
 
 _CATEGORY_ORDER = ("metadata", "sample", "condition", "property", "figure")

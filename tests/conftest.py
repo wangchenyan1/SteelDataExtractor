@@ -45,7 +45,7 @@ class _ParsedDir:
 def _use_fixture_backend(monkeypatch):
     from tools import pipeline as pl
 
-    monkeypatch.setattr(pl, "get_backend", lambda name, root: FixtureBackend(root))
+    monkeypatch.setattr(pl, "get_backend", lambda name, root, **kwargs: FixtureBackend(root))
 
     orig = pl._resolve_parsed_dir
 

@@ -2,8 +2,8 @@
 import json
 from pathlib import Path
 
-from tools.pipeline import delete_run, list_runs
-from tools.workbench_server import handle_post
+from tools.pipeline import delete_run, get_run_artifacts, list_runs
+from tools.workbench_server import handle_get, handle_post
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -87,3 +87,53 @@ def test_delete_button_in_review_ui():
     js = (ROOT / "app/app.js").read_text(encoding="utf-8")
     assert "async function deleteSelectedRun" in js
     assert "/api/run_delete" in js
+
+
+def test_get_run_artifacts_reads_logs(tmp_path):
+    paper_id = "p_art"
+    run_id = "20260903_155908_two_stage_qwen-vl-max"
+    rd = tmp_path / "test" / run_id
+    (rd / "logs").mkdir(parents=True)
+    (rd / "RUN_INFO.json").write_text(
+        json.dumps({
+            "run_id": run_id,
+            "paper_id": paper_id,
+            "status": "failed",
+            "error": "LLM HTTP 404: ",
+            "warnings": 0,
+        }),
+        encoding="utf-8",
+    )
+    (rd / "logs" / "entity_llm_meta.json").write_text(
+        '{"http_status": 404}', encoding="utf-8"
+    )
+    (rd / "logs" / "entity_llm_raw.txt").write_text("", encoding="utf-8")
+    (rd / "merged_outputs").mkdir(parents=True)
+    (rd / "merged_outputs" / "paper.json").write_text('{"samples":[]}', encoding="utf-8")
+    (rd / "entities").mkdir(parents=True)
+    (rd / "entities" / "entity.json").write_text('{"samples":[]}', encoding="utf-8")
+    (rd / "prompt_preview").mkdir(parents=True)
+    (rd / "prompt_preview" / "entity_prompt.txt").write_text("prompt", encoding="utf-8")
+    out = get_run_artifacts(ROOT, {"test_runs": str(tmp_path)}, paper_id, run_id)
+    names = [f["name"] for f in out["files"]]
+    assert "merged_outputs/paper.json" in names
+    assert "entities/entity.json" in names
+    assert "logs/entity_llm_meta.json" in names
+    assert names.index("merged_outputs/paper.json") < names.index("prompt_preview/entity_prompt.txt")
+    assert out["run_info"]["status"] == "failed"
+
+
+def test_run_artifacts_api_missing_params():
+    status, data = handle_get("/api/run_artifacts", {})
+    assert status == 400
+    assert "error" in data
+
+
+def test_run_artifacts_button_in_review_ui():
+    html = (ROOT / "app/index.html").read_text(encoding="utf-8")
+    assert 'id="btnShowRunArtifacts"' in html
+    assert 'id="runArtifactsPanel"' in html
+    js = (ROOT / "app/app.js").read_text(encoding="utf-8")
+    assert "async function showRunArtifacts" in js
+    assert "/api/run_artifacts" in js
+    assert 'status) === "failed"' in js or 'status === "failed"' in js

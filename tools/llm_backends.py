@@ -16,7 +16,27 @@ from typing import Any
 DEFAULT_BASE_URL = "https://api.gpugeek.com/v1/messages"
 DEFAULT_MODEL = "Vendor2/Claude-4.5-Sonnet"
 DEFAULT_MAX_TOKENS = 16384
+ENTITY_MAX_TOKENS = 32768
 DEFAULT_TIMEOUT = 600
+
+
+class LLMCallError(RuntimeError):
+    """LLM 调用或 JSON 解析失败，附带完整 raw / stop_reason 供落盘。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        raw_text: str = "",
+        stop_reason: str | None = None,
+        http_status: int | None = None,
+        response_body: str = "",
+    ):
+        super().__init__(message)
+        self.raw_text = raw_text or ""
+        self.stop_reason = stop_reason
+        self.http_status = http_status
+        self.response_body = response_body or ""
 
 
 def _load_env(start: Path) -> None:
@@ -41,6 +61,20 @@ def _load_env(start: Path) -> None:
                 os.environ[k] = v
 
 
+def resolve_max_tokens(hint: dict | None = None) -> int:
+    """骨架(entity) 用更大窗口；hint.max_tokens 可覆盖。"""
+    hint = hint or {}
+    override = hint.get("max_tokens")
+    if override is not None:
+        try:
+            return max(1, int(override))
+        except (TypeError, ValueError):
+            pass
+    if hint.get("stage") in ("entity", "figure_extract"):
+        return ENTITY_MAX_TOKENS
+    return DEFAULT_MAX_TOKENS
+
+
 def parse_json_strict(text: str) -> dict:
     text = (text or "").strip()
     try:
@@ -62,11 +96,29 @@ def parse_json_strict(text: str) -> dict:
     raise ValueError(f"无法解析 LLM 输出为 JSON: {text[:300]}")
 
 
+def extract_text_and_stop(data: dict) -> tuple[str, str | None]:
+    raw = "".join(
+        b.get("text", "") for b in data.get("content", [])
+        if isinstance(b, dict) and b.get("type") == "text"
+    ).strip()
+    stop = data.get("stop_reason")
+    if stop is not None:
+        stop = str(stop)
+    return raw, stop
+
+
 class ClaudeBackend:
     name = "claude"
 
-    def __init__(self, workspace_root: Path):
+    def __init__(
+        self,
+        workspace_root: Path,
+        model: str | None = None,
+        base_url: str | None = None,
+    ):
         _load_env(Path(workspace_root))
+        self.model = (model or os.getenv("LLM_MODEL") or DEFAULT_MODEL).strip()
+        self.base_url = (base_url or os.getenv("LLM_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
 
     def _key(self) -> str:
         key = os.getenv("LLM_API_KEY") or os.getenv("GPUGEEK_API_KEY")
@@ -88,9 +140,10 @@ class ClaudeBackend:
             })
         content.append({"type": "text", "text": text_prompt})
 
+        max_tokens = resolve_max_tokens(hint)
         payload = {
-            "model": os.getenv("LLM_MODEL") or DEFAULT_MODEL,
-            "max_tokens": DEFAULT_MAX_TOKENS,
+            "model": self.model,
+            "max_tokens": max_tokens,
             "temperature": 0.0,
             "system": system_prompt,
             "messages": [{"role": "user", "content": content}],
@@ -100,20 +153,46 @@ class ClaudeBackend:
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
         }
-        base_url = (os.getenv("LLM_BASE_URL") or DEFAULT_BASE_URL).rstrip("/")
-        resp = requests.post(base_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
+        resp = requests.post(self.base_url, headers=headers, json=payload, timeout=DEFAULT_TIMEOUT)
         if resp.status_code >= 400:
-            raise RuntimeError(f"LLM HTTP {resp.status_code}: {resp.text[:300]}")
-        data = resp.json()
-        raw = "".join(
-            b.get("text", "") for b in data.get("content", [])
-            if isinstance(b, dict) and b.get("type") == "text"
-        ).strip()
-        return parse_json_strict(raw)
+            body = resp.text or ""
+            raise LLMCallError(
+                f"LLM HTTP {resp.status_code}: {body[:300]}",
+                http_status=resp.status_code,
+                response_body=body,
+                raw_text=body,
+            )
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            body = resp.text or ""
+            raise LLMCallError(
+                f"LLM 响应不是 JSON: {body[:300]}",
+                http_status=resp.status_code,
+                response_body=body,
+                raw_text=body,
+            ) from exc
+
+        raw, stop_reason = extract_text_and_stop(data if isinstance(data, dict) else {})
+        try:
+            return parse_json_strict(raw)
+        except ValueError as exc:
+            raise LLMCallError(
+                str(exc),
+                raw_text=raw,
+                stop_reason=stop_reason,
+                http_status=resp.status_code,
+                response_body=json.dumps(data, ensure_ascii=False) if isinstance(data, dict) else (resp.text or ""),
+            ) from exc
 
 
-def get_backend(name: str, workspace_root: Path):
+def get_backend(
+    name: str,
+    workspace_root: Path,
+    model: str | None = None,
+    base_url: str | None = None,
+):
     key = (name or "claude").strip().lower()
     if key == "claude":
-        return ClaudeBackend(workspace_root)
+        return ClaudeBackend(workspace_root, model=model, base_url=base_url)
     raise ValueError(f"未知抽取后端 {name!r}。请使用 claude。")
