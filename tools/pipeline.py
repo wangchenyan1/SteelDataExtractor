@@ -2292,3 +2292,4 @@ def _build_summary_md(info: dict, trim: dict, warnings: list) -> str:
     else:
         lines.append("- 无")
     return "\n".join(lines) + "\n"
+

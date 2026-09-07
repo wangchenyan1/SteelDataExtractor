@@ -134,3 +134,4 @@ test_runs/<project>/<test|data>/<run_id>/
 ```
 
 PDF 解析只写入该项目配置的 `parsed_results/<paper_id>/`，不写回外部原始数据目录。
+
